@@ -1,18 +1,26 @@
 [project]
-name = "mcp-email"
+name = "mcp-email-sender"
 version = "0.1.0"
-description = "MCP server for sending emails via SMTP"
+description = "MCP server for sending emails via SMTP or Resend"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
+keywords = ["mcp", "email", "smtp", "resend", "ai-agent"]
+authors = [
+    {name = "uaniay", email = "uaniay@outlook.com"},
+]
 dependencies = [
     "mcp>=1.0.0",
     "pydantic>=2.0.0",
     "httpx>=0.27.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/uaniay/plugins/tree/main/mcp-servers/email"
+Repository = "https://github.com/uaniay/plugins"
+
 [project.scripts]
-mcp-email = "src.server:main"
+mcp-email-sender = "src.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

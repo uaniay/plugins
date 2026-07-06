@@ -1,7 +1,7 @@
 ---
 name: email-sender
 description: Guide AI agents to compose and send emails properly using the mcp-email server
-version: 0.1.0
+version: 0.2.0
 triggers:
   - send email
   - compose email
@@ -12,7 +12,7 @@ triggers:
 
 # Email Sender Skill
 
-You have access to an email MCP server (`mcp-email`) that can send emails via SMTP.
+You have access to an email MCP server (`mcp-email`) that can send emails via SMTP or Resend.
 
 ## When to use
 
@@ -25,19 +25,26 @@ Use the `send_email` tool when the user asks you to:
 ## How to use
 
 1. **Confirm with the user** before sending. Always show them:
-   - Recipient (to)
+   - Recipient(s)
    - Subject line
-   - Body content (formatted)
+   - Body content
+   - Attachments (if any)
 
 2. **Compose the email:**
    - Write a clear, professional subject line
    - Structure the body with proper greeting and sign-off
-   - Keep it concise unless the user asks for a longer message
-   - Use plain text by default; use HTML only if the user needs formatting (tables, links, etc.)
+   - Keep it concise unless the user asks for more
+   - Use plain text by default; use HTML only if formatting is needed
 
 3. **Call the tool:**
-   ```
-   send_email(to="recipient@example.com", subject="...", body="...")
+   ```json
+   {
+     "to": ["recipient@example.com"],
+     "subject": "Subject here",
+     "body": "Email body here",
+     "cc": ["optional@example.com"],
+     "attachments": [{"path": "/path/to/file.pdf", "filename": "report.pdf"}]
+   }
    ```
 
 4. **Report the result** to the user.
@@ -47,7 +54,16 @@ Use the `send_email` tool when the user asks you to:
 - **Never send without confirmation.** Always show the draft and ask "Should I send this?"
 - **Never guess the recipient.** If the user says "email John" but you don't know John's address, ask.
 - **Respect privacy.** Don't include sensitive information unless the user explicitly provides it.
-- **One recipient per call.** For multiple recipients, make separate calls or ask the user to clarify.
+- **Multiple recipients are supported.** Pass them as an array in `to`.
+- **CC/BCC are optional.** Use when the user asks to copy someone.
+
+## Attachments
+
+You can attach files by providing either:
+- `path` — absolute path to a file on disk
+- `content_base64` — base64-encoded content (for generated content)
+
+Always include a `filename` for clarity.
 
 ## Common patterns
 
@@ -72,7 +88,11 @@ Subject: [Action item or update]
 [Direct message, 1-3 sentences]
 ```
 
+### Email with attachment
+Show the user: "I'll send [file] to [recipient] with subject [subject]. Send it?"
+
 ## Error handling
 
-- If SMTP credentials are not configured, tell the user they need to set up the MCP server with their SMTP credentials.
-- If sending fails, report the error clearly and suggest checking credentials or recipient address.
+- If credentials are not configured, tell the user they need to set up the MCP server environment variables.
+- If sending fails, report the error and suggest checking credentials or recipient address.
+- If an attachment path doesn't exist, report which file was not found.

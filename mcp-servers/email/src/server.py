@@ -29,6 +29,7 @@ def get_smtp_config() -> dict:
         "password": environ.get("SMTP_PASSWORD", ""),
         "from_address": environ.get("SMTP_FROM", environ.get("SMTP_USERNAME", "")),
         "use_tls": environ.get("SMTP_USE_TLS", "true").lower() == "true",
+        "use_ssl": environ.get("SMTP_USE_SSL", "false").lower() == "true",
     }
 
 
@@ -88,7 +89,12 @@ def send_via_smtp(
         all_recipients.extend(bcc)
 
     try:
-        if config["use_tls"]:
+        if config["use_ssl"]:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(config["host"], config["port"], context=context) as smtp:
+                smtp.login(config["username"], config["password"])
+                smtp.sendmail(config["from_address"], all_recipients, msg.as_string())
+        elif config["use_tls"]:
             context = ssl.create_default_context()
             with smtplib.SMTP(config["host"], config["port"]) as smtp:
                 smtp.starttls(context=context)

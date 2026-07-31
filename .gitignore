@@ -46,3 +46,7 @@ uv.lock
 coverage/
 htmlcov/
 .coverage
+
+# Claude Code local state
+.claude/projects/
+.planning/

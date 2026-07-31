@@ -1,0 +1,30 @@
+[project]
+name = "mcp-mssql-query"
+version = "0.1.0"
+description = "MCP server for read-only MSSQL queries"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+keywords = ["mcp", "mssql", "sqlserver", "database", "ai-agent"]
+authors = [
+    {name = "uaniay", email = "uaniay@outlook.com"},
+]
+dependencies = [
+    "mcp>=1.9.0",
+    "pymssql>=2.3.0",
+    "sqlglot>=25.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/uaniay/plugins/tree/main/mcp-servers/mssql"
+Repository = "https://github.com/uaniay/plugins"
+
+[project.scripts]
+mcp-mssql-query = "src.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

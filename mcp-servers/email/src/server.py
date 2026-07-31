@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import smtplib
 import ssl
@@ -10,11 +9,9 @@ from os import environ
 from pathlib import Path
 
 import httpx
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.server import MCPServer
 
-server = Server("mcp-email")
+server = MCPServer("mcp-email")
 
 
 def get_provider() -> str:
@@ -180,6 +177,7 @@ def send_via_resend(
         return f"Error: Failed to send email via Resend — {e}"
 
 
+@server.tool()
 def send_email(
     to: list[str],
     subject: str,
@@ -189,104 +187,27 @@ def send_email(
     bcc: list[str] | None = None,
     attachments: list[dict] | None = None,
 ) -> str:
+    """Send an email. Supports SMTP and Resend providers. Set EMAIL_PROVIDER=resend to use Resend API.
+
+    Args:
+        to: Recipient email addresses
+        subject: Email subject line
+        body: Email body content
+        html: Whether body is HTML (default: false, plain text)
+        cc: CC recipients (optional)
+        bcc: BCC recipients (optional)
+        attachments: File attachments (optional). Each item needs 'path' or 'content_base64', plus optional 'filename'.
+    """
+    if isinstance(to, str):
+        to = [to]
     provider = get_provider()
     if provider == "resend":
         return send_via_resend(to, subject, body, html, cc, bcc, attachments)
     return send_via_smtp(to, subject, body, html, cc, bcc, attachments)
 
 
-@server.list_tools()
-async def list_tools() -> list[Tool]:
-    return [
-        Tool(
-            name="send_email",
-            description="Send an email. Supports SMTP and Resend providers. Set EMAIL_PROVIDER=resend to use Resend API.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "to": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Recipient email addresses",
-                    },
-                    "subject": {
-                        "type": "string",
-                        "description": "Email subject line",
-                    },
-                    "body": {
-                        "type": "string",
-                        "description": "Email body content",
-                    },
-                    "html": {
-                        "type": "boolean",
-                        "description": "Whether body is HTML (default: false, plain text)",
-                        "default": False,
-                    },
-                    "cc": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "CC recipients (optional)",
-                    },
-                    "bcc": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "BCC recipients (optional)",
-                    },
-                    "attachments": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "path": {
-                                    "type": "string",
-                                    "description": "File path to attach",
-                                },
-                                "content_base64": {
-                                    "type": "string",
-                                    "description": "Base64-encoded file content (alternative to path)",
-                                },
-                                "filename": {
-                                    "type": "string",
-                                    "description": "Display filename for the attachment",
-                                },
-                            },
-                        },
-                        "description": "File attachments (optional). Provide either 'path' or 'content_base64' for each.",
-                    },
-                },
-                "required": ["to", "subject", "body"],
-            },
-        )
-    ]
-
-
-@server.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    if name == "send_email":
-        to = arguments["to"]
-        if isinstance(to, str):
-            to = [to]
-        result = send_email(
-            to=to,
-            subject=arguments["subject"],
-            body=arguments["body"],
-            html=arguments.get("html", False),
-            cc=arguments.get("cc"),
-            bcc=arguments.get("bcc"),
-            attachments=arguments.get("attachments"),
-        )
-        return [TextContent(type="text", text=result)]
-
-    return [TextContent(type="text", text=f"Unknown tool: {name}")]
-
-
 def main():
-    asyncio.run(run())
-
-
-async def run():
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
+    server.run(transport="stdio")
 
 
 if __name__ == "__main__":

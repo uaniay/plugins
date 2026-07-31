@@ -91,6 +91,16 @@ Subject: [Action item or update]
 ### Email with attachment
 Show the user: "I'll send [file] to [recipient] with subject [subject]. Send it?"
 
+## SMTP configuration notes
+
+| Variable | Purpose |
+|---|---|
+| `SMTP_USE_TLS=true` | STARTTLS upgrade on port 587 (most providers) |
+| `SMTP_USE_SSL=true` | Direct SSL on port 465 — set `SMTP_USE_TLS=false` when using this |
+| `SMTP_FROM` | Override sender address; defaults to `SMTP_USERNAME` |
+
+For Gmail: port 587 + `SMTP_USE_TLS=true`, or port 465 + `SMTP_USE_SSL=true` + `SMTP_USE_TLS=false`.
+
 ## Error handling
 
 - If credentials are not configured, tell the user they need to set up the MCP server environment variables.

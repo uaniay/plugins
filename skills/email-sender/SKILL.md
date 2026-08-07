@@ -1,7 +1,7 @@
 ---
 name: email-sender
 description: Guide AI agents to compose and send emails properly using the mcp-email server
-version: 0.2.0
+version: 0.3.0
 triggers:
   - send email
   - compose email
@@ -14,95 +14,90 @@ triggers:
 
 You have access to an email MCP server (`mcp-email`) that can send emails via SMTP or Resend.
 
-## When to use
+---
 
-Use the `send_email` tool when the user asks you to:
-- Send an email to someone
-- Compose and deliver a message
-- Notify someone via email
-- Follow up with someone by email
+## Groups
 
-## How to use
+- [Composition](#composition) — when and how to compose emails
+- [Formatting Rules](#formatting-rules) — structure, links, tables, code
+- [Tool Usage](#tool-usage) — MCP tool schema and parameters
+- [Safety](#safety) — confirmation, privacy, validation
+- [Scripts](#scripts) — available automation scripts
 
-1. **Confirm with the user** before sending. Always show them:
-   - Recipient(s)
-   - Subject line
-   - Body content
-   - Attachments (if any)
+---
 
-2. **Compose the email:**
-   - Write a clear, professional subject line
-   - Structure the body with proper greeting and sign-off
-   - Keep it concise unless the user asks for more
-   - Use plain text by default; use HTML only if formatting is needed
+## Composition
 
-3. **Call the tool:**
-   ```json
-   {
-     "to": ["recipient@example.com"],
-     "subject": "Subject here",
-     "body": "Email body here",
-     "cc": ["optional@example.com"],
-     "attachments": [{"path": "/path/to/file.pdf", "filename": "report.pdf"}]
-   }
-   ```
+Use the `send_email` tool when the user asks to send, compose, notify, or follow up by email.
 
-4. **Report the result** to the user.
+**Workflow:**
+1. Draft the email following → [email-format.md](references/email-format.md)
+2. Validate the draft using → [scripts/validate-email-draft.py](scripts/validate-email-draft.py)
+3. Show the draft to the user and ask: _"Should I send this?"_
+4. Call the MCP tool — see → [mcp-tool-reference.md](references/mcp-tool-reference.md)
+5. Report success or error to the user
 
-## Rules
+---
 
-- **Never send without confirmation.** Always show the draft and ask "Should I send this?"
-- **Never guess the recipient.** If the user says "email John" but you don't know John's address, ask.
-- **Respect privacy.** Don't include sensitive information unless the user explicitly provides it.
-- **Multiple recipients are supported.** Pass them as an array in `to`.
-- **CC/BCC are optional.** Use when the user asks to copy someone.
+## Formatting Rules
 
-## Attachments
+### Structure & Templates
+→ [email-format.md](references/email-format.md)
 
-You can attach files by providing either:
-- `path` — absolute path to a file on disk
-- `content_base64` — base64-encoded content (for generated content)
+- Every email must follow: Subject → Greeting → Body → Closing → Sign-off
+- Always end with `Best regards,` — never omit
+- Use the appropriate template: Standard / Notification / Data / Follow-up
 
-Always include a `filename` for clarity.
+### Links
+→ [link-formatting.md](references/link-formatting.md)
 
-## Common patterns
+- Never embed raw URLs mid-sentence
+- HTML email: use `<a href="...">Label</a>` with descriptive text
+- Plain text: place URL on its own line with a `Label: url` format
+- 2+ links: group as a labeled list before the sign-off
+- Never use URL shorteners; always use `https://`
 
-### Professional email
-```
-Subject: [Brief, specific topic]
+### Tables & Data
+→ [data-tables.md](references/data-tables.md)
 
-Hi [Name],
+- Wrap all tables in HTML `<table>` (HTML email) or markdown `| col |` syntax (plain text)
+- Never use tab-separated or space-aligned raw data
+- Numeric columns → right-align
+- Wrap all code/commands in `<pre><code>` or triple backticks
 
-[1-2 sentences with the key point]
+---
 
-[Any necessary details]
+## Tool Usage
 
-Best,
-[User's name if known]
-```
+→ [mcp-tool-reference.md](references/mcp-tool-reference.md)
 
-### Quick notification
-```
-Subject: [Action item or update]
-
-[Direct message, 1-3 sentences]
+Minimal call:
+```json
+{
+  "to": ["recipient@example.com"],
+  "subject": "Subject here",
+  "body": "Email body"
+}
 ```
 
-### Email with attachment
-Show the user: "I'll send [file] to [recipient] with subject [subject]. Send it?"
+Full call with all optional fields: see reference doc above.
 
-## SMTP configuration notes
+---
 
-| Variable | Purpose |
-|---|---|
-| `SMTP_USE_TLS=true` | STARTTLS upgrade on port 587 (most providers) |
-| `SMTP_USE_SSL=true` | Direct SSL on port 465 — set `SMTP_USE_TLS=false` when using this |
-| `SMTP_FROM` | Override sender address; defaults to `SMTP_USERNAME` |
+## Safety
 
-For Gmail: port 587 + `SMTP_USE_TLS=true`, or port 465 + `SMTP_USE_SSL=true` + `SMTP_USE_TLS=false`.
+- **Never send without confirmation.** Always show the draft first.
+- **Never guess the recipient.** If address is unknown, ask the user.
+- **Respect privacy.** Don't include sensitive data unless the user explicitly provides it.
+- If credentials are not configured, tell the user to set up MCP server env vars — see → [mcp-tool-reference.md](references/mcp-tool-reference.md)
 
-## Error handling
+---
 
-- If credentials are not configured, tell the user they need to set up the MCP server environment variables.
-- If sending fails, report the error and suggest checking credentials or recipient address.
-- If an attachment path doesn't exist, report which file was not found.
+## Scripts
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| [build-html-email.py](scripts/build-html-email.py) | Convert plain-text draft to styled HTML email | `python3 build-html-email.py --input draft.txt --output email.html` |
+| [validate-email-draft.py](scripts/validate-email-draft.py) | Validate draft against formatting rules before sending | `python3 validate-email-draft.py --input draft.txt` |
+
+Run the validator before every send to catch missing sign-offs, bare URLs, insecure links, and unformatted tables.

@@ -13,3 +13,9 @@ packages/
 │   ├── prompts/        # Optional
 │   └── README.md
 ```
+
+## Packages
+
+| Package | Description |
+|---------|-------------|
+| [pi-ruleset](./pi-ruleset) | Store and apply business rules as structured Markdown files |

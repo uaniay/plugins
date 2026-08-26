@@ -1,0 +1,18 @@
+{
+  "name": "pi-ruleset",
+  "version": "0.2.0",
+  "description": "Store and apply business rules as structured per-day Markdown files with BM25 search",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./extensions"],
+    "skills": ["./skills"],
+    "prompts": ["./prompts"]
+  },
+  "dependencies": {
+    "wink-bm25-text-search": "^2.3.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}

@@ -45,19 +45,111 @@ interface SimilarityCandidate {
 }
 
 // ---------------------------------------------------------------------------
-// Path helpers
+// Two-level path resolution
 // ---------------------------------------------------------------------------
 
-function todayStr(): string {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+type RulesetMode = "both" | "project-only" | "global-only";
+
+interface RulesetConfig {
+  mode: RulesetMode;
 }
 
-function resolveBaseDir(rulesDir: string, cwd: string): string {
-  return path.isAbsolute(rulesDir) ? rulesDir : path.join(cwd, rulesDir);
+function globalRulesDir(): string {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "~";
+  return path.join(home, ".pi", "agent", "rules");
+}
+
+function projectRulesDir(cwd: string): string | null {
+  // walk up from cwd looking for .git or .pi
+  let dir = cwd;
+  for (let i = 0; i < 10; i++) {
+    if (
+      fs.existsSync(path.join(dir, ".git")) ||
+      fs.existsSync(path.join(dir, ".pi"))
+    ) {
+      return path.join(dir, ".pi", "rules");
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+function readRulesetConfig(cwd: string): RulesetConfig {
+  // check project .pi/settings.json first, then fall back to defaults
+  const projectRoot = (() => {
+    let dir = cwd;
+    for (let i = 0; i < 10; i++) {
+      if (fs.existsSync(path.join(dir, ".pi", "settings.json"))) return dir;
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+    return null;
+  })();
+
+  if (projectRoot) {
+    try {
+      const raw = fs.readFileSync(
+        path.join(projectRoot, ".pi", "settings.json"),
+        "utf-8"
+      );
+      const parsed = JSON.parse(raw);
+      const mode = parsed?.["pi-ruleset"]?.mode;
+      if (mode === "project-only" || mode === "global-only" || mode === "both") {
+        return { mode };
+      }
+    } catch {
+      // malformed settings — fall through to default
+    }
+  }
+  return { mode: "both" };
+}
+
+interface ResolvedDirs {
+  write: string;          // where ruleset_add writes to
+  read: string[];         // ordered list to read from (project first)
+  projectDir: string | null;
+  globalDir: string;
+}
+
+function resolveRulesDirs(cwd: string, overrideDir?: string): ResolvedDirs {
+  const globalDir = globalRulesDir();
+  const projectDir = projectRulesDir(cwd);
+  const config = readRulesetConfig(cwd);
+
+  // explicit override from tool parameter — use as-is
+  if (overrideDir) {
+    const resolved = path.isAbsolute(overrideDir)
+      ? overrideDir
+      : path.join(cwd, overrideDir);
+    return { write: resolved, read: [resolved], projectDir, globalDir };
+  }
+
+  const mode = config.mode;
+
+  if (mode === "project-only") {
+    const dir = projectDir ?? path.join(cwd, ".pi", "rules");
+    return { write: dir, read: [dir], projectDir, globalDir };
+  }
+
+  if (mode === "global-only") {
+    return { write: globalDir, read: [globalDir], projectDir, globalDir };
+  }
+
+  // "both" (default): project first for reads, project for writes (fall back to global)
+  const writeDir = projectDir ?? globalDir;
+  const readDirs = projectDir ? [projectDir, globalDir] : [globalDir];
+  return { write: writeDir, read: readDirs, projectDir, globalDir };
+}
+
+function todayStr(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function dailyDir(baseDir: string, date: string): string {
-  return path.join(baseDir, date); // e.g. ./rules/2026-08-25/
+  return path.join(baseDir, date);
 }
 
 function ruleFilePath(baseDir: string, date: string, id: string, slug: string): string {
@@ -338,16 +430,36 @@ function findSimilarRules(
 // ---------------------------------------------------------------------------
 
 export default function (pi: ExtensionAPI) {
-  const DEFAULT_DIR = "./rules";
-
   const FULL_INJECT_THRESHOLD = 10;
   const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
 
+  // Merge entries from multiple dirs — project entries override global entries with same ID.
+  function mergeEntries(dirs: string[]): Array<IndexEntry & { sourceDir: string }> {
+    const seen = new Map<string, IndexEntry & { sourceDir: string }>();
+    // dirs are ordered project-first; first occurrence wins (project overrides global)
+    for (const dir of dirs) {
+      for (const entry of readIndex(dir)) {
+        if (!seen.has(entry.id)) {
+          seen.set(entry.id, { ...entry, sourceDir: dir });
+        }
+      }
+    }
+    return Array.from(seen.values());
+  }
+
+  // Find which dir an entry lives in.
+  function findEntryDir(id: string, dirs: string[]): string | null {
+    for (const dir of dirs) {
+      const entries = readIndex(dir);
+      if (entries.find((e) => e.id === id)) return dir;
+    }
+    return null;
+  }
+
   // Build the rules block injected into every agent turn.
-  // < FULL_INJECT_THRESHOLD active rules → inject full rule content directly.
-  // >= FULL_INJECT_THRESHOLD            → inject index summary only; agent uses ruleset_get for details.
-  function buildRulesBlock(baseDir: string): string | null {
-    const entries = readIndex(baseDir).filter((e) => e.status === "active");
+  function buildRulesBlock(cwd: string): string | null {
+    const { read } = resolveRulesDirs(cwd);
+    const entries = mergeEntries(read).filter((e) => e.status === "active");
     if (entries.length === 0) return null;
 
     const sorted = [...entries].sort(
@@ -355,7 +467,6 @@ export default function (pi: ExtensionAPI) {
     );
 
     if (sorted.length < FULL_INJECT_THRESHOLD) {
-      // full content mode
       const blocks: string[] = [
         "## Active Business Rules",
         "",
@@ -363,7 +474,7 @@ export default function (pi: ExtensionAPI) {
         "",
       ];
       for (const entry of sorted) {
-        const rule = readRuleFile(path.join(baseDir, entry.file));
+        const rule = readRuleFile(path.join(entry.sourceDir, entry.file));
         if (!rule) continue;
         blocks.push(serializeRule(rule));
         blocks.push("---");
@@ -389,40 +500,38 @@ export default function (pi: ExtensionAPI) {
     return lines.join("\n");
   }
 
-  // before_agent_start: fires once per user turn before the agent loop.
-  // Returns { systemPrompt } to append rules — chained with other extensions.
   pi.on("before_agent_start", (event, ctx) => {
-    const baseDir = resolveBaseDir(DEFAULT_DIR, ctx.cwd);
-    const block = buildRulesBlock(baseDir);
+    const block = buildRulesBlock(ctx.cwd);
     if (!block) return;
     return { systemPrompt: event.systemPrompt + "\n\n" + block };
   });
 
-  // context: fires before every LLM provider request — keeps rules visible after compaction.
-  // Returns { messages } with the injected block appended.
   pi.on("context", (event, ctx) => {
-    const baseDir = resolveBaseDir(DEFAULT_DIR, ctx.cwd);
-    const block = buildRulesBlock(baseDir);
+    const block = buildRulesBlock(ctx.cwd);
     if (!block) return;
     return { messages: [...event.messages, { role: "user", content: block }] };
   });
 
   pi.on("session_start", (_event, ctx) => {
-    const baseDir = resolveBaseDir(DEFAULT_DIR, ctx.cwd);
-    if (!fs.existsSync(indexPath(baseDir))) {
-      ctx.ui.notify(
-        "pi-ruleset: no rule index found — use ruleset_add to create your first rule",
-        "info"
-      );
-    } else {
-      const entries = readIndex(baseDir).filter((e) => e.status === "active");
-      if (entries.length > 0) {
-        ctx.ui.notify(
-          `pi-ruleset: ${entries.length} active rule${entries.length > 1 ? "s" : ""} loaded`,
-          "info"
-        );
+    const { read, projectDir, globalDir } = resolveRulesDirs(ctx.cwd);
+    const entries = mergeEntries(read).filter((e) => e.status === "active");
+
+    if (entries.length === 0) {
+      const config = readRulesetConfig(ctx.cwd);
+      if (config.mode !== "global-only" && projectDir) {
+        ctx.ui.notify("pi-ruleset: no rules found — use ruleset_add to create your first rule", "info");
+      } else {
+        ctx.ui.notify("pi-ruleset: no rules found — use ruleset_add to create your first rule", "info");
       }
+      return;
     }
+
+    const projectCount = projectDir ? readIndex(projectDir).filter((e) => e.status === "active").length : 0;
+    const globalCount = readIndex(globalDir).filter((e) => e.status === "active").length;
+    const parts: string[] = [];
+    if (projectCount > 0) parts.push(`${projectCount} project`);
+    if (globalCount > 0) parts.push(`${globalCount} global`);
+    ctx.ui.notify(`pi-ruleset: ${entries.length} active rule${entries.length > 1 ? "s" : ""} loaded (${parts.join(", ")})`, "info");
   });
 
   // -------------------------------------------------------------------------
@@ -432,11 +541,14 @@ export default function (pi: ExtensionAPI) {
     name: "ruleset_add",
     label: "Add Rule",
     description:
-      "Add a new business rule. Automatically checks for similar existing rules before writing — returns candidates for LLM confirmation if similarity is detected.",
+      "Add a new business rule. Checks for similar existing rules before writing. Writes to project (.pi/rules/) by default, or global (~/.pi/agent/rules/) if no project is detected.",
     parameters: Type.Object({
       title: Type.String({ description: "Short title for the rule" }),
       summary: Type.String({ description: "One-sentence summary shown in the index" }),
       description: Type.String({ description: "Full description of what this rule governs" }),
+      raw_description: Type.Optional(Type.String({
+        description: "Original user words describing the rule — paste verbatim, preserved as-is",
+      })),
       conditions: Type.Array(Type.String(), { default: [], description: "Conditions that trigger this rule (can be empty if not yet known)" }),
       actions: Type.Array(Type.String(), { default: [], description: "Actions to take when conditions are met (can be empty if not yet known)" }),
       priority: Type.Union(
@@ -447,29 +559,36 @@ export default function (pi: ExtensionAPI) {
       scope: Type.Optional(Type.Array(Type.String(), {
         description: "Customer IDs or names this rule applies to. Empty or omit = applies to all customers.",
       })),
-      raw_description: Type.Optional(Type.String({
-        description: "Original user words describing the rule — paste verbatim, preserved as-is alongside the structured description",
-      })),
       references: Type.Array(Type.String(), {
         default: [],
         description: "Markdown file paths under references/ (e.g. pricing-policy.md)",
       }),
-      rules_dir: Type.Optional(Type.String({ description: "Base directory for rules (default: ./rules)" })),
+      rules_dir: Type.Optional(Type.String({ description: "Override base directory for rules" })),
+      target: Type.Optional(Type.Union(
+        [Type.Literal("project"), Type.Literal("global")],
+        { description: "Force write to project or global dir (overrides mode config)" }
+      )),
       force: Type.Optional(
         Type.Boolean({ description: "Skip similarity check and force-add as new rule", default: false })
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const baseDir = resolveBaseDir(params.rules_dir ?? DEFAULT_DIR, ctx.cwd);
-      const entries = readIndex(baseDir);
+      const dirs = resolveRulesDirs(ctx.cwd, params.rules_dir);
 
-      // Layer 1: algorithmic similarity check
+      // target override
+      let writeDir = dirs.write;
+      if (params.target === "global") writeDir = dirs.globalDir;
+      if (params.target === "project") writeDir = dirs.projectDir ?? dirs.globalDir;
+
+      const { read } = dirs;
+      const allEntries = mergeEntries(read);
+
       if (!params.force) {
         const candidates = findSimilarRules(
           params.title,
           params.summary,
           params.tags ?? [],
-          entries
+          allEntries
         );
         if (candidates.length > 0) {
           const list = candidates
@@ -479,31 +598,30 @@ export default function (pi: ExtensionAPI) {
             )
             .join("\n");
           return {
-            content: [
-              {
-                type: "text",
-                text: [
-                  "Similar rules already exist. Please review before deciding:",
-                  "",
-                  list,
-                  "",
-                  "Options:",
-                  "1. Call `ruleset_update` with the existing rule ID to update it",
-                  "2. Call `ruleset_add` again with `force: true` to add as a new separate rule",
-                  "",
-                  "Layer 2 — ask the user or reason: does the new rule cover a meaningfully different scenario?",
-                ].join("\n"),
-              },
-            ],
+            content: [{
+              type: "text",
+              text: [
+                "Similar rules already exist. Please review before deciding:",
+                "",
+                list,
+                "",
+                "Options:",
+                "1. Call `ruleset_update` with the existing rule ID to update it",
+                "2. Call `ruleset_add` again with `force: true` to add as a new separate rule",
+                "",
+                "Layer 2 — ask the user or reason: does the new rule cover a meaningfully different scenario?",
+              ].join("\n"),
+            }],
           };
         }
       }
 
       const today = todayStr();
-      const id = nextId(entries);
+      // ID is global across both dirs to avoid collisions
+      const id = nextId(allEntries);
       const slug = slugify(params.title);
-      const filePath = ruleFilePath(baseDir, today, id, slug);
-      const relPath = path.relative(baseDir, filePath);
+      const filePath = ruleFilePath(writeDir, today, id, slug);
+      const relPath = path.relative(writeDir, filePath);
 
       const rule: Rule = {
         id,
@@ -526,7 +644,8 @@ export default function (pi: ExtensionAPI) {
 
       writeRuleFile(filePath, rule);
 
-      entries.push({
+      const writeEntries = readIndex(writeDir);
+      writeEntries.push({
         id,
         title: params.title,
         status: "active",
@@ -537,10 +656,11 @@ export default function (pi: ExtensionAPI) {
         file: relPath,
         updated: today,
       });
-      writeIndex(baseDir, entries);
+      writeIndex(writeDir, writeEntries);
 
+      const location = writeDir === dirs.globalDir ? "global" : "project";
       return {
-        content: [{ type: "text", text: `Rule added: ${id} — ${params.title}\nFile: ${relPath}` }],
+        content: [{ type: "text", text: `Rule added: ${id} — ${params.title}\nFile: ${relPath}\nLocation: ${location} (${writeDir})` }],
       };
     },
   });
@@ -551,42 +671,35 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "ruleset_update",
     label: "Update Rule",
-    description: "Update fields of an existing rule by ID",
+    description: "Update fields of an existing rule by ID. Searches both project and global dirs.",
     parameters: Type.Object({
       id: Type.String({ description: "Rule ID to update (e.g. 001)" }),
       title: Type.Optional(Type.String()),
       summary: Type.Optional(Type.String()),
       description: Type.Optional(Type.String()),
-      raw_description: Type.Optional(Type.String({ description: "Append or replace original user description" })),
+      raw_description: Type.Optional(Type.String()),
       conditions: Type.Optional(Type.Array(Type.String())),
       actions: Type.Optional(Type.Array(Type.String())),
-      priority: Type.Optional(
-        Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")])
-      ),
+      priority: Type.Optional(Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")])),
       status: Type.Optional(Type.Union([Type.Literal("active"), Type.Literal("inactive")])),
       tags: Type.Optional(Type.Array(Type.String())),
-      scope: Type.Optional(Type.Array(Type.String({ description: "Customer IDs/names; empty = all" }))),
+      scope: Type.Optional(Type.Array(Type.String())),
       references: Type.Optional(Type.Array(Type.String())),
       rules_dir: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const baseDir = resolveBaseDir(params.rules_dir ?? DEFAULT_DIR, ctx.cwd);
-      const entries = readIndex(baseDir);
-      const entry = entries.find((e) => e.id === params.id);
-      if (!entry) {
-        return {
-          content: [{ type: "text", text: `Rule not found: ${params.id}` }],
-          isError: true,
-        };
+      const { read } = resolveRulesDirs(ctx.cwd, params.rules_dir);
+      const sourceDir = findEntryDir(params.id, read);
+      if (!sourceDir) {
+        return { content: [{ type: "text", text: `Rule not found: ${params.id}` }], isError: true };
       }
 
-      const fullPath = path.join(baseDir, entry.file);
+      const entries = readIndex(sourceDir);
+      const entry = entries.find((e) => e.id === params.id)!;
+      const fullPath = path.join(sourceDir, entry.file);
       const rule = readRuleFile(fullPath);
       if (!rule) {
-        return {
-          content: [{ type: "text", text: `Rule file missing: ${entry.file}` }],
-          isError: true,
-        };
+        return { content: [{ type: "text", text: `Rule file missing: ${entry.file}` }], isError: true };
       }
 
       if (params.title !== undefined) rule.title = params.title;
@@ -608,7 +721,6 @@ export default function (pi: ExtensionAPI) {
 
       writeRuleFile(fullPath, rule);
 
-      // sync index entry
       entry.title = rule.title;
       entry.summary = rule.summary;
       entry.status = rule.status;
@@ -616,11 +728,9 @@ export default function (pi: ExtensionAPI) {
       entry.tags = rule.tags;
       entry.scope = rule.scope ?? [];
       entry.updated = rule.updated;
-      writeIndex(baseDir, entries);
+      writeIndex(sourceDir, entries);
 
-      return {
-        content: [{ type: "text", text: `Rule updated: ${rule.id} — ${rule.title}` }],
-      };
+      return { content: [{ type: "text", text: `Rule updated: ${rule.id} — ${rule.title}` }] };
     },
   });
 
@@ -630,26 +740,23 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "ruleset_remove",
     label: "Remove Rule",
-    description: "Delete a rule by ID (moves file to .archive/ subdirectory for recovery)",
+    description: "Archive a rule by ID. Searches both project and global dirs.",
     parameters: Type.Object({
       id: Type.String({ description: "Rule ID to remove" }),
       rules_dir: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const baseDir = resolveBaseDir(params.rules_dir ?? DEFAULT_DIR, ctx.cwd);
-      const entries = readIndex(baseDir);
-      const idx = entries.findIndex((e) => e.id === params.id);
-      if (idx === -1) {
-        return {
-          content: [{ type: "text", text: `Rule not found: ${params.id}` }],
-          isError: true,
-        };
+      const { read } = resolveRulesDirs(ctx.cwd, params.rules_dir);
+      const sourceDir = findEntryDir(params.id, read);
+      if (!sourceDir) {
+        return { content: [{ type: "text", text: `Rule not found: ${params.id}` }], isError: true };
       }
 
+      const entries = readIndex(sourceDir);
+      const idx = entries.findIndex((e) => e.id === params.id);
       const entry = entries[idx];
-      const fullPath = path.join(baseDir, entry.file);
+      const fullPath = path.join(sourceDir, entry.file);
 
-      // archive instead of delete
       if (fs.existsSync(fullPath)) {
         const archiveDir = path.join(path.dirname(fullPath), ".archive");
         fs.mkdirSync(archiveDir, { recursive: true });
@@ -657,11 +764,9 @@ export default function (pi: ExtensionAPI) {
       }
 
       entries.splice(idx, 1);
-      writeIndex(baseDir, entries);
+      writeIndex(sourceDir, entries);
 
-      return {
-        content: [{ type: "text", text: `Rule removed: ${entry.id} — ${entry.title} (archived)` }],
-      };
+      return { content: [{ type: "text", text: `Rule removed: ${entry.id} — ${entry.title} (archived)` }] };
     },
   });
 
@@ -671,34 +776,29 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "ruleset_list",
     label: "List Rules",
-    description: "List all rules from the index with their summaries",
+    description: "List all rules from both project and global dirs",
     parameters: Type.Object({
       status: Type.Optional(
-        Type.Union(
-          [Type.Literal("active"), Type.Literal("inactive"), Type.Literal("all")],
-          { default: "all" }
-        )
+        Type.Union([Type.Literal("active"), Type.Literal("inactive"), Type.Literal("all")], { default: "all" })
       ),
       rules_dir: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const baseDir = resolveBaseDir(params.rules_dir ?? DEFAULT_DIR, ctx.cwd);
-      const entries = readIndex(baseDir);
+      const { read } = resolveRulesDirs(ctx.cwd, params.rules_dir);
       const filter = params.status ?? "all";
-      const filtered = filter === "all" ? entries : entries.filter((e) => e.status === filter);
+      const entries = mergeEntries(read).filter((e) => filter === "all" || e.status === filter);
 
-      if (filtered.length === 0) {
+      if (entries.length === 0) {
         return { content: [{ type: "text", text: "No rules found." }] };
       }
 
-      const priorityOrder = { high: 0, medium: 1, low: 2 };
-      const sorted = [...filtered].sort(
-        (a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]
+      const sorted = [...entries].sort(
+        (a, b) => (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9)
       );
 
       const lines = sorted.map(
         (e) =>
-          `[${e.id}] ${e.title} | ${e.status} | ${e.priority} | ${e.tags.join(", ") || "—"}\n    ${e.summary}`
+          `[${e.id}] ${e.title} | ${e.status} | ${e.priority} | scope: ${(e.scope ?? []).join(", ") || "all"}\n    ${e.summary}`
       );
 
       return { content: [{ type: "text", text: lines.join("\n") }] };
@@ -706,55 +806,41 @@ export default function (pi: ExtensionAPI) {
   });
 
   // -------------------------------------------------------------------------
-  // ruleset_get — semantic search + full rule content
+  // ruleset_get
   // -------------------------------------------------------------------------
   pi.registerTool({
     name: "ruleset_get",
     label: "Get Rules",
-    description:
-      "Retrieve full rule content by ID or semantic query. Use before applying any rule to a task.",
+    description: "Retrieve full rule content by ID or semantic query. Searches both project and global dirs.",
     parameters: Type.Object({
       id: Type.Optional(Type.String({ description: "Exact rule ID (e.g. 001)" })),
-      query: Type.Optional(
-        Type.String({ description: "Natural language query to find relevant rules semantically" })
-      ),
-      top_k: Type.Optional(
-        Type.Number({ default: 3, description: "Max number of rules to return for query mode" })
-      ),
+      query: Type.Optional(Type.String({ description: "Natural language query to find relevant rules" })),
+      top_k: Type.Optional(Type.Number({ default: 3 })),
       rules_dir: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const baseDir = resolveBaseDir(params.rules_dir ?? DEFAULT_DIR, ctx.cwd);
-      const entries = readIndex(baseDir);
+      const { read } = resolveRulesDirs(ctx.cwd, params.rules_dir);
 
-      // exact ID lookup
       if (params.id) {
-        const entry = entries.find((e) => e.id === params.id);
-        if (!entry) {
-          return {
-            content: [{ type: "text", text: `Rule not found: ${params.id}` }],
-            isError: true,
-          };
+        const sourceDir = findEntryDir(params.id, read);
+        if (!sourceDir) {
+          return { content: [{ type: "text", text: `Rule not found: ${params.id}` }], isError: true };
         }
-        const rule = readRuleFile(path.join(baseDir, entry.file));
+        const entry = readIndex(sourceDir).find((e) => e.id === params.id)!;
+        const rule = readRuleFile(path.join(sourceDir, entry.file));
         if (!rule) {
-          return {
-            content: [{ type: "text", text: `Rule file missing: ${entry.file}` }],
-            isError: true,
-          };
+          return { content: [{ type: "text", text: `Rule file missing: ${entry.file}` }], isError: true };
         }
         return { content: [{ type: "text", text: serializeRule(rule) }] };
       }
 
-      // semantic query via BM25
       if (params.query) {
         const topK = params.top_k ?? 3;
-        const activeEntries = entries.filter((e) => e.status === "active");
+        const allEntries = mergeEntries(read).filter((e) => e.status === "active");
 
-        // load full rule objects
         const ruleMap = new Map<string, Rule>();
-        for (const entry of activeEntries) {
-          const rule = readRuleFile(path.join(baseDir, entry.file));
+        for (const entry of allEntries) {
+          const rule = readRuleFile(path.join(entry.sourceDir, entry.file));
           if (rule) ruleMap.set(rule.id, rule);
         }
 
@@ -780,15 +866,12 @@ export default function (pi: ExtensionAPI) {
         return { content: [{ type: "text", text: blocks.join("\n\n---\n\n") }] };
       }
 
-      return {
-        content: [{ type: "text", text: "Provide either `id` or `query` parameter." }],
-        isError: true,
-      };
+      return { content: [{ type: "text", text: "Provide either `id` or `query` parameter." }], isError: true };
     },
   });
 
   // -------------------------------------------------------------------------
-  // ruleset_add_reference — add a reference doc to references/
+  // ruleset_add_reference
   // -------------------------------------------------------------------------
   pi.registerTool({
     name: "ruleset_add_reference",
@@ -797,11 +880,19 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       name: Type.String({ description: "File name (e.g. pricing-policy.md)" }),
       content: Type.String({ description: "Markdown content of the reference document" }),
+      target: Type.Optional(Type.Union(
+        [Type.Literal("project"), Type.Literal("global")],
+        { description: "Write to project or global dir (default: same as ruleset_add)" }
+      )),
       rules_dir: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const baseDir = resolveBaseDir(params.rules_dir ?? DEFAULT_DIR, ctx.cwd);
-      const refDir = referencesDir(baseDir);
+      const dirs = resolveRulesDirs(ctx.cwd, params.rules_dir);
+      let writeDir = dirs.write;
+      if (params.target === "global") writeDir = dirs.globalDir;
+      if (params.target === "project") writeDir = dirs.projectDir ?? dirs.globalDir;
+
+      const refDir = referencesDir(writeDir);
       fs.mkdirSync(refDir, { recursive: true });
 
       const fileName = params.name.endsWith(".md") ? params.name : `${params.name}.md`;
@@ -809,12 +900,10 @@ export default function (pi: ExtensionAPI) {
       fs.writeFileSync(filePath, params.content, "utf-8");
 
       return {
-        content: [
-          {
-            type: "text",
-            text: `Reference added: references/${fileName}\nLink with: [${path.basename(fileName, ".md")}](../references/${fileName})`,
-          },
-        ],
+        content: [{
+          type: "text",
+          text: `Reference added: references/${fileName}\nLink with: [${path.basename(fileName, ".md")}](../references/${fileName})`,
+        }],
       };
     },
   });

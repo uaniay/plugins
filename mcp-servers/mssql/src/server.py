@@ -42,6 +42,9 @@ _FORBIDDEN_FUNCTIONS = {
 
 
 def _get_conn_params() -> dict:
+    import os
+    # FreeTDS defaults to TDS 7.0; SQL Server 2012+ requires 7.4
+    os.environ.setdefault("TDSVER", "7.4")
     return {
         "server": environ.get("MSSQL_HOST", "localhost"),
         "port": int(environ.get("MSSQL_PORT", "1433")),

@@ -2,19 +2,18 @@
   "name": "pi-ruleset",
   "version": "0.2.0",
   "description": "Store and apply business rules as structured per-day Markdown files with BM25 search",
-  "keywords": [
-    "pi-package"
-  ],
+  "keywords": ["pi-package"],
+  "author": "uaniay",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/uaniay/plugins.git",
+    "directory": "packages/pi-ruleset"
+  },
   "pi": {
-    "extensions": [
-      "./extensions"
-    ],
-    "skills": [
-      "./skills"
-    ],
-    "prompts": [
-      "./prompts"
-    ]
+    "extensions": ["./extensions"],
+    "skills": ["./skills"],
+    "prompts": ["./prompts"]
   },
   "dependencies": {
     "wink-bm25-text-search": "^3.1.2"
@@ -22,5 +21,12 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
-  }
+  },
+  "files": [
+    "extensions/",
+    "skills/",
+    "prompts/",
+    "rules/references/",
+    "rules/RULES.md"
+  ]
 }

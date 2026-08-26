@@ -660,7 +660,7 @@ export default function (pi: ExtensionAPI) {
 
       const location = writeDir === dirs.globalDir ? "global" : "project";
       return {
-        content: [{ type: "text", text: `Rule added: ${id} — ${params.title}\nFile: ${relPath}\nLocation: ${location} (${writeDir})` }],
+        content: [{ type: "text", text: `Rule added: ${id} — ${params.title}` }],
       };
     },
   });

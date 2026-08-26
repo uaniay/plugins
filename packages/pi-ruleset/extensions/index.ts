@@ -348,7 +348,7 @@ function tagOverlap(a: string[], b: string[]): number {
 function buildSimilarityEngine(
   entries: IndexEntry[]
 ): (query: string) => Array<[string, number]> {
-  if (entries.length === 0) return () => [];
+  if (entries.length < 2) return () => [];
 
   const engine = bm25();
   engine.defineConfig({ fldWeights: { title: 3, summary: 2, tags: 2 } });
@@ -370,7 +370,7 @@ function buildSimilarityEngine(
 function buildSemanticEngine(
   rules: Rule[]
 ): (query: string, limit: number) => Array<[string, number]> {
-  if (rules.length === 0) return () => [];
+  if (rules.length < 2) return () => [];
 
   const engine = bm25();
   engine.defineConfig({

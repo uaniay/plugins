@@ -500,14 +500,35 @@ export default function (pi: ExtensionAPI) {
     return lines.join("\n");
   }
 
+  // Marker injected at the start of every rules block so context event can detect it.
+  const RULES_MARKER = "<!-- pi-ruleset -->";
+
+  function buildRulesBlockMarked(cwd: string): string | null {
+    const block = buildRulesBlock(cwd);
+    if (!block) return null;
+    return RULES_MARKER + "\n" + block;
+  }
+
+  function messagesHaveRules(messages: { role: string; content: unknown }[]): boolean {
+    return messages.some(
+      (m) =>
+        typeof m.content === "string" &&
+        m.content.includes(RULES_MARKER)
+    );
+  }
+
   pi.on("before_agent_start", (event, ctx) => {
-    const block = buildRulesBlock(ctx.cwd);
+    const block = buildRulesBlockMarked(ctx.cwd);
     if (!block) return;
     return { systemPrompt: event.systemPrompt + "\n\n" + block };
   });
 
+  // context fires before every provider request.
+  // Only inject if rules are not already present — prevents double-injection on normal turns.
+  // After compaction the marker disappears from messages, so this re-injects automatically.
   pi.on("context", (event, ctx) => {
-    const block = buildRulesBlock(ctx.cwd);
+    if (messagesHaveRules(event.messages as { role: string; content: unknown }[])) return;
+    const block = buildRulesBlockMarked(ctx.cwd);
     if (!block) return;
     return { messages: [...event.messages, { role: "user", content: block }] };
   });

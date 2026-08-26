@@ -90,10 +90,10 @@ function readIndex(baseDir: string): IndexEntry[] {
   const content = fs.readFileSync(fp, "utf-8");
   const entries: IndexEntry[] = [];
   for (const line of content.split("\n")) {
-    // table row: | id | title | status | priority | tags | summary | file | updated |
+    // table row: | id | title | status | priority | tags | summary | scope | file | updated |
     if (!line.startsWith("|") || line.startsWith("| ID") || line.startsWith("| --")) continue;
     const cols = line.split("|").map((c) => c.trim()).filter(Boolean);
-    if (cols.length < 8) continue;
+    if (cols.length < 9) continue;
     entries.push({
       id: cols[0],
       title: cols[1],

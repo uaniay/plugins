@@ -53,12 +53,48 @@ Extract the intent and call `ruleset_add` with:
 - `title`: short imperative phrase
 - `summary`: one sentence
 - `description`: full context from the conversation
-- `conditions`: inferred from the user's scenario
-- `actions`: inferred from the user's intended outcome
+- `raw_description`: the user's **original words verbatim** — always include this, do not paraphrase
+- `conditions`: inferred from the user's scenario; leave empty `[]` if unclear
+- `actions`: inferred from the user's intended outcome; leave empty `[]` if unclear
 - `priority`: infer from urgency language ("always", "never", "must" → high)
 - `tags`: infer from domain keywords
 
 Confirm with the user after saving: _"Rule saved: {id} — {title}"_
+If `conditions` or `actions` were left empty, mention: _"Conditions/Actions are pending — update rule {id} when you have more details."_
+
+---
+
+## Domain-language rule capture
+
+When the user describes logic using domain/technical terms without standard "if/then" structure, such as:
+- "small parcel processing 是针对 activity report 中 material 表里对应的不同规格 ID 对应的 QTY 来计算的"
+- "针对 ClientA 的折扣按照 tier 2 pricing 算"
+- "根据这个特殊逻辑去比对"
+
+1. Save `raw_description` as the user's exact words — never rephrase or discard
+2. Extract what is known into structured fields: `title`, `summary`, `tags`, data sources in `description`
+3. Leave `conditions` and `actions` as `[]` if the full logic is not yet clear
+4. Ask one focused follow-up question to clarify the missing piece (what is being compared, what the threshold is, etc.)
+5. Update the rule with `ruleset_update` once the user clarifies
+
+---
+
+## Customer-scoped rules
+
+When the user says a rule applies only to specific customers:
+- "针对 ClientA 的规则是..."
+- "only for customer X"
+- "这个规则只适用于 ABC 公司"
+
+Set the `scope` parameter to the customer ID(s) or name(s):
+```
+scope: ["ClientA"]
+scope: ["ABC Corp", "XYZ Ltd"]
+```
+
+Rules with `scope` are only applied when the current task involves a customer that matches the scope. When checking rules, always verify scope before applying:
+- If rule has scope and current customer is NOT in scope → skip the rule
+- If rule has no scope (empty) → applies to all customers
 
 ---
 

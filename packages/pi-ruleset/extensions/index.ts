@@ -17,6 +17,8 @@ interface Rule {
   tags: string[];
   summary: string;
   description: string;
+  raw_description?: string;   // original user words, preserved verbatim
+  scope?: string[];            // customer IDs or groups this rule applies to; empty = all
   conditions: string[];
   actions: string[];
   references: string[];
@@ -31,6 +33,7 @@ interface IndexEntry {
   priority: "high" | "medium" | "low";
   tags: string[];
   summary: string;
+  scope?: string[];
   file: string;
   updated: string;
 }
@@ -98,8 +101,9 @@ function readIndex(baseDir: string): IndexEntry[] {
       priority: cols[3] as IndexEntry["priority"],
       tags: cols[4].split(",").map((t) => t.trim()).filter(Boolean),
       summary: cols[5],
-      file: cols[6],
-      updated: cols[7],
+      scope: cols[6] ? cols[6].split(";").map((s) => s.trim()).filter(Boolean) : [],
+      file: cols[7],
+      updated: cols[8],
     });
   }
   return entries;
@@ -110,12 +114,12 @@ function writeIndex(baseDir: string, entries: IndexEntry[]): void {
   const header = [
     "# Ruleset Index",
     "",
-    "| ID | Title | Status | Priority | Tags | Summary | File | Updated |",
-    "|----|-------|--------|----------|------|---------|------|---------|",
+    "| ID | Title | Status | Priority | Tags | Summary | Scope | File | Updated |",
+    "|----|-------|--------|----------|------|---------|-------|------|---------|",
   ];
   const rows = entries.map(
     (e) =>
-      `| ${e.id} | ${e.title} | ${e.status} | ${e.priority} | ${e.tags.join(", ")} | ${e.summary} | ${e.file} | ${e.updated} |`
+      `| ${e.id} | ${e.title} | ${e.status} | ${e.priority} | ${e.tags.join(", ")} | ${e.summary} | ${(e.scope ?? []).join("; ")} | ${e.file} | ${e.updated} |`
   );
   fs.writeFileSync(indexPath(baseDir), [...header, ...rows, ""].join("\n"), "utf-8");
 }
@@ -139,25 +143,36 @@ function serializeRule(rule: Rule): string {
     `- **Tags:** ${rule.tags.join(", ")}`,
     `- **Created:** ${rule.created}`,
     `- **Updated:** ${rule.updated}`,
-    "",
-    "## Summary",
-    "",
-    rule.summary,
-    "",
-    "## Description",
-    "",
-    rule.description,
-    "",
-    "## Conditions",
-    "",
-    ...rule.conditions.map((c) => `- ${c}`),
-    "",
-    "## Actions",
-    "",
-    ...rule.actions.map((a) => `- ${a}`),
   ];
 
-  if (rule.references.length > 0) {
+  if (rule.scope && rule.scope.length > 0) {
+    lines.push(`- **Scope:** ${rule.scope.join(", ")}`);
+  }
+
+  lines.push("", "## Summary", "", rule.summary, "");
+
+  if (rule.raw_description) {
+    lines.push("## Original Description", "", rule.raw_description, "");
+  }
+
+  lines.push("## Description", "", rule.description, "");
+
+  lines.push("## Conditions", "");
+  if (rule.conditions.length > 0) {
+    lines.push(...rule.conditions.map((c) => `- ${c}`));
+  } else {
+    lines.push("- (pending — to be defined)");
+  }
+  lines.push("");
+
+  lines.push("## Actions", "");
+  if (rule.actions.length > 0) {
+    lines.push(...rule.actions.map((a) => `- ${a}`));
+  } else {
+    lines.push("- (pending — to be defined)");
+  }
+
+  if (rule.references && rule.references.length > 0) {
     lines.push("", "## References", "");
     for (const ref of rule.references) {
       lines.push(`- ${ref}`);
@@ -172,10 +187,16 @@ function parseRuleFile(content: string): Partial<Rule> {
   const getList = (section: string): string[] => {
     const m = content.match(new RegExp(`## ${section}\\n([\\s\\S]*?)(?=\\n## |$)`));
     if (!m) return [];
-    return m[1].split("\n").map((l) => l.replace(/^-\s*/, "").trim()).filter(Boolean);
+    return m[1]
+      .split("\n")
+      .map((l) => l.replace(/^-\s*/, "").trim())
+      .filter((l) => l && l !== "(pending — to be defined)");
   };
 
   const titleLine = content.match(/^# (\S+): (.+)$/m);
+  const scopeRaw = get(/\*\*Scope:\*\*\s*(.+)/);
+  const rawDesc = getList("Original Description").join("\n");
+
   return {
     id: titleLine?.[1],
     title: titleLine?.[2]?.trim(),
@@ -184,7 +205,9 @@ function parseRuleFile(content: string): Partial<Rule> {
     tags: get(/\*\*Tags:\*\*\s*(.+)/).split(",").map((t) => t.trim()).filter(Boolean),
     created: get(/\*\*Created:\*\*\s*(.+)/),
     updated: get(/\*\*Updated:\*\*\s*(.+)/),
+    scope: scopeRaw ? scopeRaw.split(",").map((s) => s.trim()).filter(Boolean) : [],
     summary: getList("Summary").join(" "),
+    raw_description: rawDesc || undefined,
     description: getList("Description").join("\n"),
     conditions: getList("Conditions"),
     actions: getList("Actions"),
@@ -353,12 +376,13 @@ export default function (pi: ExtensionAPI) {
       "## Active Business Rules (index)",
       "",
       `${sorted.length} rules active. Use \`ruleset_get\` with a semantic query to load relevant rules before applying them.`,
+      "Rules with a Scope column only apply to the listed customers.",
       "",
-      "| ID | Title | Priority | Tags | Summary |",
-      "|----|-------|----------|------|---------|",
+      "| ID | Title | Priority | Tags | Scope | Summary |",
+      "|----|-------|----------|------|-------|---------|",
       ...sorted.map(
         (e) =>
-          `| ${e.id} | ${e.title} | ${e.priority} | ${e.tags.join(", ")} | ${e.summary} |`
+          `| ${e.id} | ${e.title} | ${e.priority} | ${e.tags.join(", ")} | ${(e.scope ?? []).join(", ") || "all"} | ${e.summary} |`
       ),
       "",
     ];
@@ -413,13 +437,19 @@ export default function (pi: ExtensionAPI) {
       title: Type.String({ description: "Short title for the rule" }),
       summary: Type.String({ description: "One-sentence summary shown in the index" }),
       description: Type.String({ description: "Full description of what this rule governs" }),
-      conditions: Type.Array(Type.String(), { description: "Conditions that trigger this rule" }),
-      actions: Type.Array(Type.String(), { description: "Actions to take when conditions are met" }),
+      conditions: Type.Array(Type.String(), { default: [], description: "Conditions that trigger this rule (can be empty if not yet known)" }),
+      actions: Type.Array(Type.String(), { default: [], description: "Actions to take when conditions are met (can be empty if not yet known)" }),
       priority: Type.Union(
         [Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")],
         { default: "medium" }
       ),
       tags: Type.Array(Type.String(), { default: [] }),
+      scope: Type.Optional(Type.Array(Type.String(), {
+        description: "Customer IDs or names this rule applies to. Empty or omit = applies to all customers.",
+      })),
+      raw_description: Type.Optional(Type.String({
+        description: "Original user words describing the rule — paste verbatim, preserved as-is alongside the structured description",
+      })),
       references: Type.Array(Type.String(), {
         default: [],
         description: "Markdown file paths under references/ (e.g. pricing-policy.md)",
@@ -483,8 +513,10 @@ export default function (pi: ExtensionAPI) {
         tags: params.tags ?? [],
         summary: params.summary,
         description: params.description,
-        conditions: params.conditions,
-        actions: params.actions,
+        raw_description: params.raw_description,
+        scope: params.scope ?? [],
+        conditions: params.conditions ?? [],
+        actions: params.actions ?? [],
         references: (params.references ?? []).map((r) =>
           r.startsWith("[") ? r : `[${path.basename(r, ".md")}](../references/${r})`
         ),
@@ -501,6 +533,7 @@ export default function (pi: ExtensionAPI) {
         priority: params.priority ?? "medium",
         tags: params.tags ?? [],
         summary: params.summary,
+        scope: params.scope ?? [],
         file: relPath,
         updated: today,
       });
@@ -524,6 +557,7 @@ export default function (pi: ExtensionAPI) {
       title: Type.Optional(Type.String()),
       summary: Type.Optional(Type.String()),
       description: Type.Optional(Type.String()),
+      raw_description: Type.Optional(Type.String({ description: "Append or replace original user description" })),
       conditions: Type.Optional(Type.Array(Type.String())),
       actions: Type.Optional(Type.Array(Type.String())),
       priority: Type.Optional(
@@ -531,6 +565,7 @@ export default function (pi: ExtensionAPI) {
       ),
       status: Type.Optional(Type.Union([Type.Literal("active"), Type.Literal("inactive")])),
       tags: Type.Optional(Type.Array(Type.String())),
+      scope: Type.Optional(Type.Array(Type.String({ description: "Customer IDs/names; empty = all" }))),
       references: Type.Optional(Type.Array(Type.String())),
       rules_dir: Type.Optional(Type.String()),
     }),
@@ -557,11 +592,13 @@ export default function (pi: ExtensionAPI) {
       if (params.title !== undefined) rule.title = params.title;
       if (params.summary !== undefined) rule.summary = params.summary;
       if (params.description !== undefined) rule.description = params.description;
+      if (params.raw_description !== undefined) rule.raw_description = params.raw_description;
       if (params.conditions !== undefined) rule.conditions = params.conditions;
       if (params.actions !== undefined) rule.actions = params.actions;
       if (params.priority !== undefined) rule.priority = params.priority;
       if (params.status !== undefined) rule.status = params.status;
       if (params.tags !== undefined) rule.tags = params.tags;
+      if (params.scope !== undefined) rule.scope = params.scope;
       if (params.references !== undefined) {
         rule.references = params.references.map((r) =>
           r.startsWith("[") ? r : `[${path.basename(r, ".md")}](../references/${r})`
@@ -577,6 +614,7 @@ export default function (pi: ExtensionAPI) {
       entry.status = rule.status;
       entry.priority = rule.priority;
       entry.tags = rule.tags;
+      entry.scope = rule.scope ?? [];
       entry.updated = rule.updated;
       writeIndex(baseDir, entries);
 

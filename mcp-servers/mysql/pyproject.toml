@@ -1,0 +1,30 @@
+[project]
+name = "mcp-mysql-query"
+version = "0.1.0"
+description = "MCP server for read-only MySQL queries"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+keywords = ["mcp", "mysql", "database", "ai-agent"]
+authors = [
+    {name = "uaniay", email = "uaniay@outlook.com"},
+]
+dependencies = [
+    "mcp>=1.9.0",
+    "pymysql>=1.1.0",
+    "sqlglot>=25.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/uaniay/plugins/tree/main/mcp-servers/mysql"
+Repository = "https://github.com/uaniay/plugins"
+
+[project.scripts]
+mcp-mysql-query = "src.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

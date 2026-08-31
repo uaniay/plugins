@@ -1,0 +1,30 @@
+[project]
+name = "mcp-pgsql-query"
+version = "0.1.0"
+description = "MCP server for read-only PostgreSQL queries"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+keywords = ["mcp", "pgsql", "postgresql", "database", "ai-agent"]
+authors = [
+    {name = "uaniay", email = "uaniay@outlook.com"},
+]
+dependencies = [
+    "mcp>=1.9.0",
+    "psycopg2-binary>=2.9.0",
+    "sqlglot>=25.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/uaniay/plugins/tree/main/mcp-servers/pgsql"
+Repository = "https://github.com/uaniay/plugins"
+
+[project.scripts]
+mcp-pgsql-query = "src.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

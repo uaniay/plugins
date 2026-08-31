@@ -1,0 +1,58 @@
+name: CI - mcp-pgsql-query
+
+on:
+  push:
+    paths:
+      - 'mcp-servers/pgsql/**'
+  pull_request:
+    paths:
+      - 'mcp-servers/pgsql/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          cache-dependency-glob: "mcp-servers/pgsql/pyproject.toml"
+
+      - name: Install dependencies
+        run: uv sync --directory mcp-servers/pgsql
+
+      - name: Run validate_query tests
+        run: |
+          uv run --directory mcp-servers/pgsql python -c "
+          from src.server import validate_query
+
+          cases = [
+              ('SELECT * FROM users', None),
+              ('SELECT id FROM t WHERE name = \\'foo\\'', None),
+              ('WITH cte AS (SELECT 1 AS n) SELECT n FROM cte', None),
+              ('SELECT 1;', None),
+              ('INSERT INTO t VALUES (1)', 'Only SELECT'),
+              ('SELECT 1; DROP TABLE users', 'Multiple statements'),
+              ('SELECT pg_read_file(\\'/etc/passwd\\')', 'not allowed'),
+              ('COPY users TO \\'/tmp/out\\'', 'Only SELECT'),
+              ('WITH x AS (UPDATE t SET a=1 RETURNING id) SELECT * FROM x', 'forbidden'),
+              ('SELECT * FROM t WHERE x = pg_read_file(\\'/etc/passwd\\')', 'not allowed'),
+          ]
+
+          failed = 0
+          for sql, expect_err in cases:
+              result = validate_query(sql)
+              if expect_err is None:
+                  ok = result is None
+              else:
+                  ok = result is not None and expect_err.lower() in result.lower()
+              status = 'PASS' if ok else 'FAIL'
+              if not ok:
+                  failed += 1
+              print(f'{status}: {sql[:70]}  => {result!r}')
+
+          if failed:
+              raise SystemExit(f'{failed} test(s) failed')
+          "
+
+      - name: Build
+        run: uv build --directory mcp-servers/pgsql

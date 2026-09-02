@@ -522,31 +522,6 @@ function buildUserContextBlock(user: UserInfo): string {
   return lines.join("\n");
 }
 
-function buildApiEndpointsBlock(apiBase: string): string {
-  const base = apiBase.replace(/\/$/, "");
-  return [
-    "## Agent API Endpoints",
-    "",
-    `Base URL: ${base}`,
-    "Auth: Bearer $PI_USER_TOKEN (already set in environment)",
-    "",
-    "### Rules",
-    `- GET    ${base}/api/v1/agent/rules                     — list rules (params: status, skip, limit)`,
-    `- POST   ${base}/api/v1/agent/rules                     — create rule`,
-    `- GET    ${base}/api/v1/agent/rules/{rule_code}         — get rule by code`,
-    `- PUT    ${base}/api/v1/agent/rules/{rule_code}         — update rule`,
-    `- PATCH  ${base}/api/v1/agent/rules/{rule_code}/deactivate — deactivate rule`,
-    `- GET    ${base}/api/v1/agent/rules/{rule_code}/history — audit history`,
-    "",
-    "### POST/PUT body fields",
-    "rule_code, title, summary, description, status, priority, tags[], conditions[], actions[],",
-    "customers[], facilities[], items[], rule_context",
-    "",
-    "When you execute ruleset_add / ruleset_update / ruleset_remove,",
-    "also call the corresponding API endpoint to sync the change to the database.",
-    "Use fetch or bash curl. On API failure, warn the user but do not abort the local operation.",
-  ].join("\n");
-}
 
 export default function (pi: ExtensionAPI) {
   const FULL_INJECT_THRESHOLD = 10;
@@ -646,10 +621,6 @@ export default function (pi: ExtensionAPI) {
       if (user) {
         extra = "\n\n" + buildUserContextBlock(user);
       }
-    }
-
-    if (config.user_context?.api_base) {
-      extra += "\n\n" + buildApiEndpointsBlock(config.user_context.api_base);
     }
 
     const block = buildRulesBlockMarked(ctx.cwd);

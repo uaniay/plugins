@@ -2,6 +2,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import * as fs from "fs";
 import * as path from "path";
+import * as https from "https";
+import * as http from "http";
 // @ts-ignore — no bundled types for wink-bm25-text-search
 import bm25 from "wink-bm25-text-search";
 
@@ -50,8 +52,19 @@ interface SimilarityCandidate {
 
 type RulesetMode = "both" | "project-only" | "global-only";
 
+interface UserContextConfig {
+  api_base: string;
+}
+
+interface UserInfo {
+  id: string;
+  name: string;
+  [key: string]: unknown;
+}
+
 interface RulesetConfig {
   mode: RulesetMode;
+  user_context?: UserContextConfig;
 }
 
 function globalRulesDir(): string {
@@ -96,10 +109,19 @@ function readRulesetConfig(cwd: string): RulesetConfig {
         "utf-8"
       );
       const parsed = JSON.parse(raw);
-      const mode = parsed?.["pi-ruleset"]?.mode;
-      if (mode === "project-only" || mode === "global-only" || mode === "both") {
-        return { mode };
-      }
+      const cfg = parsed?.["pi-ruleset"];
+      const mode = cfg?.mode;
+      const validMode: RulesetMode =
+        mode === "project-only" || mode === "global-only" || mode === "both"
+          ? mode
+          : "both";
+
+      const user_context: UserContextConfig | undefined =
+        cfg?.user_context?.api_base
+          ? { api_base: cfg.user_context.api_base }
+          : undefined;
+
+      return { mode: validMode, user_context };
     } catch {
       // malformed settings — fall through to default
     }
@@ -426,8 +448,105 @@ function findSimilarRules(
 }
 
 // ---------------------------------------------------------------------------
-// Extension entry point
+// User context helpers
 // ---------------------------------------------------------------------------
+
+function httpGet(url: string, token: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const transport = parsed.protocol === "https:" ? https : http;
+    const req = transport.get(
+      url,
+      { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk) => (data += chunk));
+        res.on("end", () => {
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(data);
+          } else {
+            reject(new Error(`HTTP ${res.statusCode}`));
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.setTimeout(5000, () => { req.destroy(); reject(new Error("timeout")); });
+  });
+}
+
+async function fetchUserInfo(config: UserContextConfig): Promise<UserInfo | null> {
+  let token: string | undefined;
+
+  try {
+    const { execSync } = await import("child_process");
+    const fromFile = execSync("cat /workspace/.pi-token 2>/dev/null", { timeout: 3000 })
+      .toString()
+      .trim();
+    if (fromFile) token = fromFile;
+  } catch {
+    // 文件不存在或读取失败
+  }
+
+  if (!token) return null;
+
+  try {
+    const base = config.api_base.replace(/\/$/, "");
+    const raw = await httpGet(`${base}/api/v1/auth/me`, token);
+    const data = JSON.parse(raw);
+    if (data?.data?.id) return data.data as UserInfo;
+    if (data?.id) return data as UserInfo;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function buildUserContextBlock(user: UserInfo): string {
+  const lines = [
+    "## Current User",
+    "",
+    `- id: ${user.id}`,
+    `- name: ${user.name}`,
+  ];
+
+  for (const [key, value] of Object.entries(user)) {
+    if (key === "id" || key === "name") continue;
+    if (Array.isArray(value)) {
+      lines.push(`- ${key}: ${value.join(", ")}`);
+    } else if (value !== null && value !== undefined) {
+      lines.push(`- ${key}: ${value}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function buildApiEndpointsBlock(apiBase: string): string {
+  const base = apiBase.replace(/\/$/, "");
+  return [
+    "## Agent API Endpoints",
+    "",
+    `Base URL: ${base}`,
+    "Auth: Bearer $PI_USER_TOKEN (already set in environment)",
+    "",
+    "### Rules",
+    `- GET    ${base}/api/v1/agent/rules                     — list rules (params: status, skip, limit)`,
+    `- POST   ${base}/api/v1/agent/rules                     — create rule`,
+    `- GET    ${base}/api/v1/agent/rules/{rule_code}         — get rule by code`,
+    `- PUT    ${base}/api/v1/agent/rules/{rule_code}         — update rule`,
+    `- PATCH  ${base}/api/v1/agent/rules/{rule_code}/deactivate — deactivate rule`,
+    `- GET    ${base}/api/v1/agent/rules/{rule_code}/history — audit history`,
+    "",
+    "### POST/PUT body fields",
+    "rule_code, title, summary, description, status, priority, tags[], conditions[], actions[],",
+    "customers[], facilities[], items[], rule_context",
+    "",
+    "When you execute ruleset_add / ruleset_update / ruleset_remove,",
+    "also call the corresponding API endpoint to sync the change to the database.",
+    "Use fetch or bash curl. On API failure, warn the user but do not abort the local operation.",
+  ].join("\n");
+}
 
 export default function (pi: ExtensionAPI) {
   const FULL_INJECT_THRESHOLD = 10;
@@ -517,10 +636,27 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
-  pi.on("before_agent_start", (event, ctx) => {
+  pi.on("before_agent_start", async (event, ctx) => {
+    const config = readRulesetConfig(ctx.cwd);
+
+    let extra = "";
+
+    if (config.user_context) {
+      const user = await fetchUserInfo(config.user_context);
+      if (user) {
+        extra = "\n\n" + buildUserContextBlock(user);
+      }
+    }
+
+    if (config.user_context?.api_base) {
+      extra += "\n\n" + buildApiEndpointsBlock(config.user_context.api_base);
+    }
+
     const block = buildRulesBlockMarked(ctx.cwd);
-    if (!block) return;
-    return { systemPrompt: event.systemPrompt + "\n\n" + block };
+    if (!block && !extra) return;
+
+    const append = (block ? "\n\n" + block : "") + extra;
+    return { systemPrompt: event.systemPrompt + append };
   });
 
   // context fires before every provider request.

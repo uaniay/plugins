@@ -100,7 +100,9 @@ PostgreSQL must be enabled explicitly in either the global `~/.pi/agent/settings
     "mode": "project-only",
     "storage": "postgres",
     "postgres": {
-      "migration": "manual"
+      "migration": "manual",
+      "sslmode": "verify-full",
+      "ssl_ca_file": "/etc/ssl/rds/global-bundle.pem"
     }
   }
 }
@@ -113,6 +115,8 @@ PostgreSQL must be enabled explicitly in either the global `~/.pi/agent/settings
 | `pi-ruleset.storage` | Yes | `markdown` | Set to `postgres` to enable PostgreSQL. |
 | `pi-ruleset.postgres.schema` | No | `agent_ruleset` | PostgreSQL schema containing the ruleset tables. The bundled migrations use `agent_ruleset`. |
 | `pi-ruleset.postgres.migration` | No | — | The only accepted value is `manual`; the runtime never executes migrations automatically. |
+| `pi-ruleset.postgres.sslmode` | No | `PGSSLMODE` or `disable` | TLS mode: `disable`, `require`, `verify-ca`, or `verify-full`. |
+| `pi-ruleset.postgres.ssl_ca_file` | No | System/Node trust store | PEM CA bundle used by `verify-ca` and `verify-full`. |
 | `pi-ruleset.mode` | No | `both` | Markdown read/write scope. PostgreSQL always uses the namespace derived from `AGENT_NAME`. |
 
 ### Environment variables
@@ -125,6 +129,8 @@ PostgreSQL must be enabled explicitly in either the global `~/.pi/agent/settings
 | `DB_NAME` | Yes | — | PostgreSQL database name. |
 | `DB_PASSWORD` | Yes | — | PostgreSQL password. |
 | `AGENT_NAME` | No | `default` | Logical ruleset namespace. Empty and whitespace-only values also use `default`. |
+| `PGSSLMODE` | No | `disable` | TLS mode fallback when `postgres.sslmode` is omitted. |
+| `NODE_EXTRA_CA_CERTS` | No | Node trust store | Extra PEM CA bundle loaded by Node when set before Pi starts. |
 
 Set the connection fields separately in the process environment:
 
@@ -136,6 +142,17 @@ DB_NAME=aurora
 DB_PASSWORD=your-password
 AGENT_NAME=default
 ```
+
+TLS behavior:
+
+| Mode | Encryption | CA verification | Hostname verification |
+|---|---:|---:|---:|
+| `disable` | No | No | No |
+| `require` | Yes | No | No |
+| `verify-ca` | Yes | Yes | No |
+| `verify-full` | Yes | Yes | Yes |
+
+For Amazon RDS production connections, use `verify-full` with the AWS RDS CA bundle. `require` encrypts traffic but intentionally does not verify the server certificate.
 
 The runtime passes the `DB_*` values separately to the PostgreSQL client. `DB_PORT` must be an integer from 1 through 65535. `AGENT_NAME` is used as the ruleset namespace; when it is unset, empty, or whitespace-only, the namespace defaults to `default`. The PostgreSQL schema defaults to `agent_ruleset` when omitted from the configuration.
 

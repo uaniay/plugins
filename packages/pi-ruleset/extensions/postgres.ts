@@ -1,11 +1,14 @@
 import type { Rule } from "./index";
 import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 export type RuleDimensions = Record<string, string | string[]>;
 
 export interface PostgresConfig {
   schema: string;
+  sslmode?: "disable" | "require" | "verify-ca" | "verify-full";
+  ssl_ca_file?: string;
 }
 
 export interface PostgresRuleInput {
@@ -32,6 +35,21 @@ export interface PostgresRuleInput {
 function quoteIdentifier(identifier: string): string {
   if (!/^[a-z_][a-z0-9_]*$/i.test(identifier)) throw new Error(`Invalid PostgreSQL schema name: ${identifier}`);
   return `"${identifier.replace(/"/g, '""')}"`;
+}
+
+function sslConfig(config: PostgresConfig): false | { ca?: string; rejectUnauthorized: boolean; checkServerIdentity?: () => undefined } {
+  const mode = config.sslmode ?? process.env.PGSSLMODE ?? "disable";
+  if (!["disable", "require", "verify-ca", "verify-full"].includes(mode)) {
+    throw new Error("PostgreSQL sslmode must be disable, require, verify-ca, or verify-full");
+  }
+  if (mode === "disable") return false;
+  if (mode === "require") return { rejectUnauthorized: false };
+  const ca = config.ssl_ca_file ? readFileSync(config.ssl_ca_file, "utf-8") : undefined;
+  return {
+    ...(ca ? { ca } : {}),
+    rejectUnauthorized: true,
+    ...(mode === "verify-ca" ? { checkServerIdentity: () => undefined } : {}),
+  };
 }
 
 function asStringArray(value: unknown): string[] { return Array.isArray(value) ? value.map(String) : []; }
@@ -118,6 +136,7 @@ export class PostgresRuleStore {
       user: process.env.DB_USER,
       database: process.env.DB_NAME,
       password: process.env.DB_PASSWORD,
+      ssl: sslConfig(config),
       max: 5,
       connectionTimeoutMillis: 5000,
       statement_timeout: 15000,

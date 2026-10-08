@@ -168,6 +168,8 @@ function readRulesetConfig(cwd: string): RulesetConfig {
       const postgres: PostgresConfig | undefined = storage === "postgres"
         ? {
             schema: cfg.postgres?.schema ?? "agent_ruleset",
+            sslmode: cfg.postgres?.sslmode,
+            ssl_ca_file: cfg.postgres?.ssl_ca_file,
           }
         : undefined;
 
@@ -583,7 +585,7 @@ export default function (pi: ExtensionAPI) {
   async function getPostgresStore(cwd: string): Promise<PostgresRuleStore | null> {
     const config = readRulesetConfig(cwd);
     if (config.storage !== "postgres" || !config.postgres) return null;
-    const key = `${process.env.DB_HOST}:${process.env.DB_PORT}:${process.env.DB_USER}:${process.env.DB_NAME}:${config.postgres.schema}:${process.env.AGENT_NAME}`;
+    const key = `${process.env.DB_HOST}:${process.env.DB_PORT}:${process.env.DB_USER}:${process.env.DB_NAME}:${config.postgres.schema}:${process.env.AGENT_NAME}:${config.postgres.sslmode ?? process.env.PGSSLMODE ?? "disable"}:${config.postgres.ssl_ca_file ?? ""}`;
     const existing = postgresStores.get(key);
     if (existing) return existing;
     const store = new PostgresRuleStore(config.postgres);

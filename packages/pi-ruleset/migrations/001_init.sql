@@ -16,7 +16,6 @@ CREATE TABLE IF NOT EXISTS billing_agent.rules (
   namespace text NOT NULL,
   title text NOT NULL,
   status text NOT NULL CHECK (status IN ('active', 'inactive')),
-  priority text NOT NULL CHECK (priority IN ('high', 'medium', 'low')),
   tags jsonb NOT NULL DEFAULT '[]'::jsonb,
   summary text NOT NULL,
   description text NOT NULL,

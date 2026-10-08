@@ -18,10 +18,11 @@ test('PostgreSQL migrations, CRUD, isolation, concurrency, rollback and referenc
   const other = new PostgresRuleStore({...config,namespace:config.namespace+'-other'});
   try {
     await pool.query('CREATE SCHEMA IF NOT EXISTS billing_agent');
-    for (let round=0;round<2;round++) for (const migration of ['001_init.sql','002_storage.sql']) {
+    for (let round=0;round<2;round++) for (const migration of ['001_init.sql','002_storage.sql','003_remove_priority.sql']) {
       await pool.query(fs.readFileSync(require('node:path').join(__dirname,'../migrations',migration),'utf8'));
     }
     await store.checkSchema();
+    assert.equal((await pool.query("SELECT column_name FROM information_schema.columns WHERE table_schema='billing_agent' AND table_name='rules' AND column_name='priority'")).rowCount,0);
     const input = {title:'费用规则',summary:'仓库费用',description:'exact original',raw_description:'原始文字\n- 保留',priority:'high',tags:[],conditions:[],actions:[],scope:['A'],dimensions:{facility:['F','G']},references:['policy','policy'],created_by_email:'author@example.com'};
     const added = await store.add(input);
     const read = await store.get(added.id);

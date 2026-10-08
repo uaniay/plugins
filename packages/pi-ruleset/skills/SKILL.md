@@ -64,7 +64,6 @@ Extract the intent and call `ruleset_add` with:
 - `raw_description`: the user's **original words verbatim** — always include this, do not paraphrase
 - `conditions`: inferred from the user's scenario; leave empty `[]` if unclear
 - `actions`: inferred from the user's intended outcome; leave empty `[]` if unclear
-- `priority`: infer from urgency language ("always", "never", "must" → high)
 - `tags`: infer from domain keywords
 
 Confirm with the user after saving: _"Rule saved: {id} — {title}"_
@@ -177,6 +176,6 @@ rules/
 
 ---
 
-## Rule priority
+## Markdown rule priority
 
-`high` → `medium` → `low`. Rules with `status: inactive` are skipped.
+For the Markdown backend only, priority is ordered `high` → `medium` → `low`. PostgreSQL storage does not persist or use priority. Rules with `status: inactive` are skipped.

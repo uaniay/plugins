@@ -115,13 +115,14 @@ For the existing `billing_agent` schema, run in order:
 ```sh
 psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_init.sql
 psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/002_storage.sql
+psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/003_remove_priority.sql
 ```
 
-Both scripts are transactional and repeatable. If version 1 is already installed, only version 2 is needed. For a different schema, the administrator must adapt both SQL files before applying. Runtime requires version 2 and only needs schema USAGE plus SELECT/INSERT/UPDATE/DELETE on its tables (SELECT suffices on schema_migrations); migration credentials may be separate. Separate schemas avoid name collisions but permissions determine access isolation.
+The scripts are transactional and repeatable. If versions 1 and 2 are already installed, apply version 3 to remove the unused `priority` column. PostgreSQL storage does not persist or sort by priority; the Markdown backend retains its existing priority format. For a different schema, the administrator must adapt all SQL files before applying. Runtime requires version 3 and only needs schema USAGE plus SELECT/INSERT/UPDATE/DELETE on its tables (SELECT suffices on schema_migrations); migration credentials may be separate. Separate schemas avoid name collisions but permissions determine access isolation.
 
 `ruleset_add` and `ruleset_update` accept `dimensions`, for example `{"customer":["A","B"],"facility":"F001"}`. Different dimensions use AND; values within a dimension use OR. `scope` remains an alias for customer. When both are supplied, `dimensions.customer` takes precedence. Updating `dimensions` replaces the entire dimension map; `{}` clears it. Updating only `scope` changes only customer. Empty dimension value arrays are rejected.
 
-Pass the task's `dimensions` to `ruleset_list` or `ruleset_get` to retrieve applicable rules, including unscoped rules. Omit it to inspect all rules. A missing required task dimension does not match. Priority sorts first, then number of dimensions; sorting does not silently override conflicting rules. Context injection shows dimension restrictions, but does not infer customer/facility automatically or provide a deterministic business-rule execution engine.
+Pass the task's `dimensions` to `ruleset_list` or `ruleset_get` to retrieve applicable rules, including unscoped rules. Omit it to inspect all rules. A missing required task dimension does not match. PostgreSQL results are ordered by specificity and update time; sorting does not silently override conflicting rules. Context injection shows dimension restrictions, but does not infer customer/facility automatically or provide a deterministic business-rule execution engine.
 
 Creation/update timestamps use UTC instants. Creator/editor email comes from the configured authenticated `user_context` API when available; otherwise it remains unknown (NULL). It is not an access-control mechanism. `ruleset_remove` archives without deleting data; `ruleset_restore` restores a known archived ID. `ruleset_add_reference` stores document content in PostgreSQL; use `ruleset_get_reference` to read it.
 

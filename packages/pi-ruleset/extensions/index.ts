@@ -849,7 +849,6 @@ export default function (pi: ExtensionAPI) {
           raw_description: params.raw_description,
           conditions: params.conditions ?? [],
           actions: params.actions ?? [],
-          priority: params.priority ?? "medium",
           tags: params.tags ?? [],
           scope: params.scope ?? [],
           dimensions: (params.dimensions ?? {}) as RuleDimensions,

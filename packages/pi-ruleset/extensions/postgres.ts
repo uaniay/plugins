@@ -17,7 +17,6 @@ export interface PostgresRuleInput {
   raw_description?: string;
   conditions: string[];
   actions: string[];
-  priority: Rule["priority"];
   tags: string[];
   scope: string[];
   dimensions: RuleDimensions;
@@ -113,7 +112,9 @@ export class PostgresRuleStore {
       id: row.id,
       title: row.title,
       status: row.status,
-      priority: row.priority,
+      // Rule is shared with the Markdown backend, which still has priority.
+      // PostgreSQL storage deliberately does not persist or use that field.
+      priority: "medium",
       tags: asStringArray(row.tags),
       summary: row.summary,
       description: row.description,
@@ -137,13 +138,12 @@ export class PostgresRuleStore {
         WHERE namespace = $1
           AND archived_at IS NULL
           AND ($2::text IS NULL OR status = $2)
-        ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
-                 updated_at DESC`,
+        ORDER BY updated_at DESC`,
       [this.namespace, status ?? null]
     );
     const rules = await Promise.all(result.rows.map((row: any) => this.rowToRule(row)));
     return rules.filter(rule => context === undefined || matchesDimensions(rule.dimensions ?? {}, context))
-      .sort((a, b) => ({high:0,medium:1,low:2}[a.priority] - {high:0,medium:1,low:2}[b.priority]) || Object.keys(b.dimensions ?? {}).length - Object.keys(a.dimensions ?? {}).length);
+      .sort((a, b) => Object.keys(b.dimensions ?? {}).length - Object.keys(a.dimensions ?? {}).length);
   }
 
   async get(id: string): Promise<Rule | null> {
@@ -177,15 +177,14 @@ export class PostgresRuleStore {
 
       await client.query(
         `INSERT INTO ${this.table("rules")} (
-           namespace, id, title, status, priority, tags, summary, description,
+           namespace, id, title, status, tags, summary, description,
            raw_description, conditions, actions, created_at, updated_at, created_by_email,
            updated_by_email
-         ) VALUES ($1, $2, $3, 'active', $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $11, $12, $12)`,
+         ) VALUES ($1, $2, $3, 'active', $4::jsonb, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $10, $11, $11)`,
         [
           this.namespace,
           id,
           input.title,
-          input.priority,
           JSON.stringify(input.tags),
           input.summary,
           input.description,
@@ -230,7 +229,7 @@ export class PostgresRuleStore {
 
   async checkSchema(): Promise<void> {
     const result = await this.pool.query(`SELECT max(version) AS version FROM ${this.table('schema_migrations')}`);
-    if (result.rows[0].version !== 2) throw new Error('pi-ruleset requires schema version 2; administrator must apply migrations/001_init.sql and 002_storage.sql');
+    if (result.rows[0].version !== 3) throw new Error('pi-ruleset requires schema version 3; administrator must apply migrations/001_init.sql, 002_storage.sql and 003_remove_priority.sql');
   }
 
   async update(id: string, patch: Partial<Rule>, email?: string): Promise<Rule | null> {
@@ -239,7 +238,7 @@ export class PostgresRuleStore {
       await client.query('BEGIN');
       const found = await client.query(`SELECT id FROM ${this.table('rules')} WHERE namespace=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`, [this.namespace, id]);
       if (!found.rowCount) { await client.query('ROLLBACK'); return null; }
-      const columns: Record<string, string> = { title:'title', summary:'summary', description:'description', raw_description:'raw_description', status:'status', priority:'priority', tags:'tags', conditions:'conditions', actions:'actions' };
+      const columns: Record<string, string> = { title:'title', summary:'summary', description:'description', raw_description:'raw_description', status:'status', tags:'tags', conditions:'conditions', actions:'actions' };
       const values: unknown[] = [this.namespace, id, email ?? null];
       const sets = ['updated_at=now()', 'updated_by_email=$3'];
       for (const [key, column] of Object.entries(columns)) {

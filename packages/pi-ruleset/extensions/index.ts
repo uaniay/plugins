@@ -15,6 +15,7 @@ import bm25 from "wink-bm25-text-search";
 export interface Rule {
   id: string;
   title: string;
+  item_name?: string;
   status: "active" | "inactive";
   priority: "high" | "medium" | "low";
   tags: string[];
@@ -48,6 +49,27 @@ interface SimilarityCandidate {
   entry: IndexEntry;
   score: number;
   reasons: string[];
+}
+
+function fixedMatchContext(params: { customer?: string; customer_id?: string; customer_name?: string; facility?: string; facility_id?: string; facility_name?: string; item?: string; cycle?: string; dimensions?: RuleDimensions }): RuleDimensions | undefined {
+  const context: RuleDimensions = { ...(params.dimensions ?? {}) };
+  for (const key of ["customer", "customer_id", "customer_name", "facility", "facility_id", "facility_name", "item", "cycle"] as const) {
+    const value = params[key];
+    if (value !== undefined) context[key] = value;
+  }
+  return Object.keys(context).length > 0 ? context : undefined;
+}
+
+function dimensionValue(value: unknown): string | undefined {
+  if (Array.isArray(value)) return value.length === 1 ? String(value[0]) : undefined;
+  return typeof value === "string" ? value : undefined;
+}
+
+function partyLabel(dimensions: RuleDimensions | undefined, key: "customer" | "facility"): string {
+  if (!dimensions || dimensions[`${key}_scope`] === "all") return "all";
+  const id = dimensionValue(dimensions[`${key}_id`]);
+  const name = dimensionValue(dimensions[`${key}_name`]);
+  return [id && `id=${id}`, name && `name=${name}`].filter(Boolean).join(", ") || dimensionValue(dimensions[key]) || "all";
 }
 
 // ---------------------------------------------------------------------------
@@ -134,7 +156,7 @@ function readRulesetConfig(cwd: string): RulesetConfig {
       const postgres: PostgresConfig | undefined = storage === "postgres"
         ? {
             connection_string_env: cfg?.postgres?.connection_string_env ?? "PI_RULESET_DATABASE_URL",
-            schema: cfg?.postgres?.schema ?? "billing_agent",
+            schema: cfg?.postgres?.schema ?? "agent_ruleset",
             namespace: cfg?.postgres?.namespace ?? "project",
           }
         : undefined;
@@ -282,6 +304,7 @@ function serializeRule(rule: Rule): string {
   }
 
   if (rule.dimensions) lines.push(`- **Dimensions:** ${JSON.stringify(rule.dimensions)}`);
+  if (rule.item_name) lines.push(`- **Item name:** ${rule.item_name}`);
   if (rule.created_by_email) lines.push(`- **Created by:** ${rule.created_by_email}`);
   if (rule.updated_by_email) lines.push(`- **Updated by:** ${rule.updated_by_email}`);
   lines.push("", "## Summary", "", rule.summary, "");
@@ -609,7 +632,7 @@ export default function (pi: ExtensionAPI) {
         const blocks: string[] = [
           "## Active Business Rules",
           "",
-          "Apply only rules whose dimensions match the task: AND across dimensions, OR within a dimension. Ask for missing task dimensions before applying scoped rules. Rules are ordered high → medium → low priority; more specific rules sort first within a priority. Report conflicting rules rather than silently overriding them.",
+          "Apply only rules whose customer, facility, and cycle fields match the task. The value all matches every task. Item is a generated rule identifier, not a business matching field. More specific rules sort first. Report conflicting rules rather than silently overriding them.",
           "",
         ];
         for (const rule of sorted) {
@@ -623,13 +646,13 @@ export default function (pi: ExtensionAPI) {
         "## Active Business Rules (index)",
         "",
         `${sorted.length} rules active. Use \`ruleset_get\` with a semantic query to load relevant rules before applying them.`,
-        "Rules apply only when all their dimensions match the task; values within one dimension are alternatives. Missing task dimensions require clarification.",
+        "Rules apply only when customer, facility, and cycle match the task; all matches every value. Item identifies a rule and may be used for exact lookup.",
         "",
-        "| ID | Title | Priority | Tags | Scope | Summary |",
-        "|----|-------|----------|------|-------|---------|",
+        "| ID | Title | Item name | Customer | Facility | Item | Cycle | Summary |",
+        "|----|-------|-----------|----------|----------|------|-------|---------|",
         ...sorted.map(
           (rule) =>
-            `| ${rule.id} | ${rule.title} | ${rule.priority} | ${rule.tags.join(", ")} | ${JSON.stringify(rule.dimensions ?? {})} | ${rule.summary} |`
+            `| ${rule.id} | ${rule.title} | ${rule.item_name} | ${partyLabel(rule.dimensions, "customer")} | ${partyLabel(rule.dimensions, "facility")} | ${rule.dimensions?.item} | ${rule.dimensions?.cycle} | ${rule.summary} |`
         ),
         "",
       ].join("\n");
@@ -766,7 +789,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Add a new business rule. Checks for similar existing rules before writing. Writes to project (.pi/rules/) by default, or global (~/.pi/agent/rules/) if no project is detected.",
     parameters: Type.Object({
-      title: Type.String({ description: "Short title for the rule" }),
+      title: Type.String({ minLength: 1, description: "Short title for the rule; PostgreSQL generates item_name from this title" }),
       summary: Type.String({ description: "One-sentence summary shown in the index" }),
       description: Type.String({ description: "Full description of what this rule governs" }),
       raw_description: Type.Optional(Type.String({
@@ -779,13 +802,22 @@ export default function (pi: ExtensionAPI) {
         { default: "medium" }
       ),
       tags: Type.Array(Type.String(), { default: [] }),
+      customer: Type.Optional(Type.String({ description: "Legacy customer name shorthand; use customer_id/customer_name for PostgreSQL" })),
+      facility: Type.Optional(Type.String({ description: "Legacy facility name shorthand; use facility_id/facility_name for PostgreSQL" })),
+      customer_scope: Type.Optional(Type.Union([Type.Literal("all"), Type.Literal("specific")])),
+      customer_id: Type.Optional(Type.String({ minLength: 1, description: "Stable customer ID for a specific customer" })),
+      customer_name: Type.Optional(Type.String({ minLength: 1, description: "Customer name for a specific customer" })),
+      facility_scope: Type.Optional(Type.Union([Type.Literal("all"), Type.Literal("specific")])),
+      facility_id: Type.Optional(Type.String({ minLength: 1, description: "Stable facility ID for a specific facility" })),
+      facility_name: Type.Optional(Type.String({ minLength: 1, description: "Facility name for a specific facility" })),
+      cycle: Type.Optional(Type.String({ description: "Cycle or period identifier; omit for all cycles" })),
       scope: Type.Optional(Type.Array(Type.String(), {
         description: "Customer IDs or names this rule applies to. Empty or omit = applies to all customers.",
       })),
       dimensions: Type.Optional(Type.Record(
         Type.String(),
         Type.Union([Type.String(), Type.Array(Type.String())]),
-        { description: "Additional dynamic matching dimensions, e.g. { facility: 'F001', guest: 'G123' }" }
+        { description: "Legacy compatibility for customer, facility, and cycle. PostgreSQL generates item and item_name; do not include either here." }
       )),
       references: Type.Array(Type.String(), {
         default: [],
@@ -804,6 +836,9 @@ export default function (pi: ExtensionAPI) {
       const postgres = await getPostgresStore(ctx.cwd);
       if (postgres) {
         if (params.rules_dir || params.target) throw new Error("PostgreSQL uses configured namespace; rules_dir/target are Markdown-only");
+        if ("item" in params || "item_name" in params || (params.dimensions && ("item" in params.dimensions || "item_name" in params.dimensions))) {
+          throw new Error("item and item_name are generated by PostgreSQL rules and cannot be supplied");
+        }
         const existingRules = await postgres.list("active");
         if (!params.force) {
           const candidates = findSimilarRules(
@@ -839,6 +874,7 @@ export default function (pi: ExtensionAPI) {
           }
         }
 
+        const fixed = (params.dimensions ?? {}) as RuleDimensions;
         const user = readRulesetConfig(ctx.cwd).user_context
           ? await fetchUserInfo(readRulesetConfig(ctx.cwd).user_context!)
           : null;
@@ -850,8 +886,15 @@ export default function (pi: ExtensionAPI) {
           conditions: params.conditions ?? [],
           actions: params.actions ?? [],
           tags: params.tags ?? [],
-          scope: params.scope ?? [],
-          dimensions: (params.dimensions ?? {}) as RuleDimensions,
+          customer: params.customer ?? dimensionValue(fixed.customer),
+          customer_scope: params.customer_scope,
+          customer_id: params.customer_id,
+          customer_name: params.customer_name,
+          facility: params.facility ?? dimensionValue(fixed.facility),
+          facility_scope: params.facility_scope,
+          facility_id: params.facility_id,
+          facility_name: params.facility_name,
+          cycle: params.cycle ?? dimensionValue(fixed.cycle) ?? "all",
           references: params.references ?? [],
           created_by_email: user && typeof user.email === "string" ? user.email : undefined,
         });
@@ -958,7 +1001,7 @@ export default function (pi: ExtensionAPI) {
     description: "Update fields of an existing rule by ID. Searches both project and global dirs.",
     parameters: Type.Object({
       id: Type.String({ description: "Rule ID to update (e.g. 001)" }),
-      title: Type.Optional(Type.String()),
+      title: Type.Optional(Type.String({ minLength: 1, description: "Updated title; PostgreSQL updates generated item_name automatically" })),
       summary: Type.Optional(Type.String()),
       description: Type.Optional(Type.String()),
       raw_description: Type.Optional(Type.String()),
@@ -967,6 +1010,15 @@ export default function (pi: ExtensionAPI) {
       priority: Type.Optional(Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")])),
       status: Type.Optional(Type.Union([Type.Literal("active"), Type.Literal("inactive")])),
       tags: Type.Optional(Type.Array(Type.String())),
+      customer: Type.Optional(Type.String()),
+      facility: Type.Optional(Type.String()),
+      customer_scope: Type.Optional(Type.Union([Type.Literal("all"), Type.Literal("specific")])),
+      customer_id: Type.Optional(Type.String({ minLength: 1 })),
+      customer_name: Type.Optional(Type.String({ minLength: 1 })),
+      facility_scope: Type.Optional(Type.Union([Type.Literal("all"), Type.Literal("specific")])),
+      facility_id: Type.Optional(Type.String({ minLength: 1 })),
+      facility_name: Type.Optional(Type.String({ minLength: 1 })),
+      cycle: Type.Optional(Type.String()),
       dimensions: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Array(Type.String())]))),
       scope: Type.Optional(Type.Array(Type.String())),
       references: Type.Optional(Type.Array(Type.String())),
@@ -976,6 +1028,9 @@ export default function (pi: ExtensionAPI) {
       const postgres = await getPostgresStore(ctx.cwd);
       if (postgres) {
         if (params.rules_dir) throw new Error("PostgreSQL uses configured namespace; rules_dir/target are Markdown-only");
+        if ("item" in params || "item_name" in params || (params.dimensions && ("item" in params.dimensions || "item_name" in params.dimensions))) {
+          throw new Error("item and item_name are generated by PostgreSQL rules and cannot be updated directly");
+        }
         const rule = await postgres.update(params.id, params, await actor(ctx.cwd));
         return { details: {}, content: [{type: "text", text: rule ? `Rule updated: ${rule.id} — ${rule.title}` : `Rule not found: ${params.id}`}], isError: !rule };
       }
@@ -1079,6 +1134,14 @@ export default function (pi: ExtensionAPI) {
     description: "List all rules from both project and global dirs",
     parameters: Type.Object({
       dimensions: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Array(Type.String())]))),
+      customer: Type.Optional(Type.String()),
+      facility: Type.Optional(Type.String()),
+      customer_id: Type.Optional(Type.String()),
+      customer_name: Type.Optional(Type.String()),
+      facility_id: Type.Optional(Type.String()),
+      facility_name: Type.Optional(Type.String()),
+      item: Type.Optional(Type.String({ description: "Generated item UUID for exact lookup only" })),
+      cycle: Type.Optional(Type.String()),
       status: Type.Optional(
         Type.Union([Type.Literal("active"), Type.Literal("inactive"), Type.Literal("all")], { default: "all" })
       ),
@@ -1089,13 +1152,13 @@ export default function (pi: ExtensionAPI) {
       if (postgres) {
         if (params.rules_dir) throw new Error("PostgreSQL uses configured namespace; rules_dir/target are Markdown-only");
         const filter = params.status === "all" ? undefined : params.status ?? undefined;
-        const rules = await postgres.list(filter, params.dimensions);
+        const rules = await postgres.list(filter, fixedMatchContext(params));
         if (rules.length === 0) {
           return { details: {}, content: [{ type: "text", text: "No rules found." }] };
         }
         const lines = rules.map(
           (rule) =>
-            `[${rule.id}] ${rule.title} | ${rule.status} | ${rule.priority} | dimensions: ${JSON.stringify(rule.dimensions ?? {})}\n    ${rule.summary}`
+            `[${rule.id}] ${rule.title} | ${rule.status} | item_name: ${rule.item_name} | customer: ${partyLabel(rule.dimensions, "customer")} | facility: ${partyLabel(rule.dimensions, "facility")} | item: ${rule.dimensions?.item} | cycle: ${rule.dimensions?.cycle}\n    ${rule.summary}`
         );
         return { details: {}, content: [{ type: "text", text: lines.join("\n") }] };
       }
@@ -1131,6 +1194,14 @@ export default function (pi: ExtensionAPI) {
     description: "Retrieve full rule content by ID or semantic query. Searches both project and global dirs.",
     parameters: Type.Object({
       dimensions: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Array(Type.String())]))),
+      customer: Type.Optional(Type.String()),
+      facility: Type.Optional(Type.String()),
+      customer_id: Type.Optional(Type.String()),
+      customer_name: Type.Optional(Type.String()),
+      facility_id: Type.Optional(Type.String()),
+      facility_name: Type.Optional(Type.String()),
+      item: Type.Optional(Type.String({ description: "Generated item UUID for exact lookup only" })),
+      cycle: Type.Optional(Type.String()),
       id: Type.Optional(Type.String({ description: "Exact rule ID (e.g. 001)" })),
       query: Type.Optional(Type.String({ description: "Natural language query to find relevant rules" })),
       top_k: Type.Optional(Type.Integer({ default: 3, minimum: 1, maximum: 100 })),
@@ -1142,7 +1213,8 @@ export default function (pi: ExtensionAPI) {
         if (params.rules_dir) throw new Error("PostgreSQL uses configured namespace; rules_dir/target are Markdown-only");
         if (params.id) {
           const rule = await postgres.get(params.id);
-          if (!rule || (params.dimensions && !matchesDimensions(rule.dimensions ?? {}, params.dimensions))) {
+          const context = fixedMatchContext(params);
+          if (!rule || (context && !matchesDimensions(rule.dimensions ?? {}, context))) {
             return { details: {}, content: [{ type: "text", text: `Rule not found: ${params.id}` }], isError: true };
           }
           return { details: {}, content: [{ type: "text", text: serializeRule(rule) }] };
@@ -1150,7 +1222,7 @@ export default function (pi: ExtensionAPI) {
 
         if (params.query) {
           const topK = params.top_k ?? 3;
-          const activeRules = await postgres.list("active", params.dimensions);
+          const activeRules = await postgres.list("active", fixedMatchContext(params));
           if (activeRules.length === 0) {
             return { details: {}, content: [{ type: "text", text: "No active rules found." }] };
           }

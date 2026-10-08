@@ -1,7 +1,7 @@
 ---
 name: ruleset
-description: Manage business rules stored as per-day structured Markdown files with BM25 semantic retrieval
-version: 0.3.0
+description: Manage business rules in PostgreSQL or per-day Markdown files with BM25 retrieval
+version: 0.3.1
 triggers:
   - add rule
   - remove rule
@@ -41,7 +41,7 @@ triggers:
 
 When configured with `storage: postgres`, use the tools for all storage operations. Do not read or write local rule files. `rules_dir` and `target` are Markdown-only; PostgreSQL uses the configured namespace.
 
-Capture arbitrary matching keys in `dimensions`, e.g. `{"customer":["A","B"],"facility":"F001"}`. Use stable business identifiers. Keys combine with AND, values with OR. Pass known task dimensions to list/get; missing required dimensions do not match. Ask for missing task context before applying a scoped rule. Updating dimensions replaces the whole map; `{}` clears it. Never infer that sorting overrides conflicting rules.
+PostgreSQL rules match on customer, facility, and cycle. Customer and facility each have a scope (`all` or `specific`) and separate ID/name fields. For `specific`, supply at least one of `customer_id`/`customer_name` and at least one of `facility_id`/`facility_name`; include both when known. An `all` scope has neither ID nor name. The legacy `customer` and `facility` string parameters remain accepted as names, but prefer explicit fields. Match by stable ID when both sides provide one; otherwise match by name when both sides provide one. Before saving, inspect recent context and fill these fields with the most specific values available. `cycle` is `all` or a specific string. The `item` field is generated uniquely for each new rule and identifies that rule. `item_name` is generated from the title and follows title changes. Do not supply either or use them for applicability matching. Pass the inferred matching fields to `ruleset_list` and `ruleset_get`.
 
 `ruleset_remove` archives database rules; `ruleset_restore` restores by ID. Reference documents are stored using `ruleset_add_reference` and read using `ruleset_get_reference`. Creator email is supplied by the authenticated user context, not by the agent. The Markdown directory instructions below apply only to the Markdown backend.
 
@@ -93,15 +93,25 @@ When the user says a rule applies only to specific customers:
 - "only for customer X"
 - "这个规则只适用于 ABC 公司"
 
-Set the `scope` parameter to the customer ID(s) or name(s):
+Set `customer_id` for a known stable ID, and `customer_name` for a known name:
 ```
-scope: ["ClientA"]
-scope: ["ABC Corp", "XYZ Ltd"]
+customer_id: "C001",
+customer_name: "ClientA"
 ```
 
-Rules with `scope` are only applied when the current task involves a customer that matches the scope. When checking rules, always verify scope before applying:
-- If rule has scope and current customer is NOT in scope → skip the rule
-- If rule has no scope (empty) → applies to all customers
+Rules with a specific customer are only applied when the current task customer matches. Use `customer_scope: "all"` for all customers; likewise use `facility_scope: "all"` for all facilities. A specific scope requires an ID or name. Apply the same matching check to `cycle`.
+
+## Required rule context
+
+When capturing a PostgreSQL rule, collect these fields before saving:
+
+- `customer_scope`: `all` or `specific`; for `specific`, provide `customer_id` or `customer_name` (both may be provided)
+- `facility_scope`: `all` or `specific`; for `specific`, provide `facility_id` or `facility_name` (both may be provided)
+- `item`: generated automatically; do not provide a value
+- `item_name`: generated from `title` and updated when `title` changes; do not provide a value
+- `cycle`: cycle/period identifier, or `all`
+
+If a value is ambiguous between an ID and a name, ask which it is before storing a specific scope. If the rule text restricts customer, facility, or cycle but the value cannot be recovered from recent context, ask the user to update the missing field instead of silently saving `all`.
 
 ---
 

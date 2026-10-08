@@ -98,7 +98,7 @@ PostgreSQL storage supports add/list/get/update/archive/restore and reference do
     "storage": "postgres",
     "postgres": {
       "connection_string_env": "PI_RULESET_DATABASE_URL",
-      "schema": "billing_agent",
+      "schema": "agent_ruleset",
       "namespace": "billing",
       "migration": "manual"
     }
@@ -110,19 +110,25 @@ Set `PI_RULESET_DATABASE_URL` in the process environment. Apply the SQL files un
 
 Put the configuration above under the project's `.pi/settings.json`. `namespace` is required: instances with the same database, schema and namespace share rules. Use different namespaces for independent projects. PostgreSQL mode uses one namespace; `mode`, `rules_dir` and `target` are Markdown concepts (the latter two are rejected in PostgreSQL tools).
 
-For the existing `billing_agent` schema, run in order:
+For the existing `agent_ruleset` schema, run in order:
 
 ```sh
 psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_init.sql
 psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/002_storage.sql
 psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/003_remove_priority.sql
+psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/004_fixed_match_fields.sql
+psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/005_generated_item.sql
+psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/006_item_name.sql
+psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/007_party_identity.sql
 ```
 
-The scripts are transactional and repeatable. If versions 1 and 2 are already installed, apply version 3 to remove the unused `priority` column. PostgreSQL storage does not persist or sort by priority; the Markdown backend retains its existing priority format. For a different schema, the administrator must adapt all SQL files before applying. Runtime requires version 3 and only needs schema USAGE plus SELECT/INSERT/UPDATE/DELETE on its tables (SELECT suffices on schema_migrations); migration credentials may be separate. Separate schemas avoid name collisions but permissions determine access isolation.
+The scripts are transactional and repeatable. Version 4 moves matching data into the `rules` table and removes the `rule_dimensions` and `rule_references` tables. Version 5 assigns each existing rule a generated `item` UUID, preserving the former business-item value in `legacy_item`, and adds a unique index on `item`. New rules receive an item UUID in the application. Version 6 adds `item_name` as a stored generated column derived from `title`; existing rules are backfilled automatically and renaming a rule updates the name. Version 7 separates customer and facility into scope, ID, and name columns with database checks. Existing single text values are migrated as names because their original type cannot be inferred. Migration 5 requires PostgreSQL 13+ for `gen_random_uuid()`. PostgreSQL stores reference names as JSONB and does not persist priority; the Markdown backend retains its priority format. Runtime requires version 7 and only needs schema USAGE plus SELECT/INSERT/UPDATE/DELETE on its tables (SELECT suffices on schema_migrations); migration credentials may be separate.
 
-`ruleset_add` and `ruleset_update` accept `dimensions`, for example `{"customer":["A","B"],"facility":"F001"}`. Different dimensions use AND; values within a dimension use OR. `scope` remains an alias for customer. When both are supplied, `dimensions.customer` takes precedence. Updating `dimensions` replaces the entire dimension map; `{}` clears it. Updating only `scope` changes only customer. Empty dimension value arrays are rejected.
+PostgreSQL rules match on customer, facility, and cycle. Customer and facility each use a scope (`all` or `specific`) and separate nullable ID/name columns. For `all`, both identity columns must be NULL. For `specific`, at least one ID or name must be nonempty; both may be stored. Omitted scope and identity values mean `all`. `cycle` is `all` or a specified value. `item` is a unique generated rule identifier, not a business-item matching field. `item_name` is generated from the rule title and stays synchronized with it.
 
-Pass the task's `dimensions` to `ruleset_list` or `ruleset_get` to retrieve applicable rules, including unscoped rules. Omit it to inspect all rules. A missing required task dimension does not match. PostgreSQL results are ordered by specificity and update time; sorting does not silently override conflicting rules. Context injection shows dimension restrictions, but does not infer customer/facility automatically or provide a deterministic business-rule execution engine.
+Use `customer_id`/`customer_name`, `facility_id`/`facility_name`, and `cycle` with `ruleset_list` or `ruleset_get` to retrieve applicable rules. When both sides have IDs, IDs determine the match; otherwise matching names may be used. The legacy `customer` and `facility` string parameters remain accepted as names. An optional `item` filters by exact generated identifier. Omit filters to inspect all rules. PostgreSQL results are ordered by specificity and update time; sorting does not silently override conflicting rules.
+
+For new rules, use explicit ID/name parameters. The legacy `customer`/`facility` shorthand is interpreted as a name, including values that may have originally been IDs. Review migrated names and correct known IDs using `ruleset_update`. Names can change or collide; prefer stable IDs when available.
 
 Creation/update timestamps use UTC instants. Creator/editor email comes from the configured authenticated `user_context` API when available; otherwise it remains unknown (NULL). It is not an access-control mechanism. `ruleset_remove` archives without deleting data; `ruleset_restore` restores a known archived ID. `ruleset_add_reference` stores document content in PostgreSQL; use `ruleset_get_reference` to read it.
 
@@ -134,7 +140,7 @@ Validation:
 npm ci
 npm run typecheck
 npm test
-# Disposable test database ONLY: integration tests create billing_agent tables.
+# Disposable test database ONLY: integration tests create agent_ruleset tables.
 PI_RULESET_TEST_DATABASE_URL='postgresql://...' npm test
 ```
 

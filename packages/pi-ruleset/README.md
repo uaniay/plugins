@@ -92,7 +92,7 @@ All tools accept an optional `rules_dir` parameter to use a different base direc
 
 PostgreSQL storage supports add/list/get/update/archive/restore and reference documents. All queries use the configured schema and namespace. Runtime never executes DDL or falls back to Markdown when a database operation fails.
 
-PostgreSQL must be enabled explicitly in the project's `.pi/settings.json`. Setting the `DB_*` environment variables alone does not enable it; without `storage: "postgres"`, pi-ruleset continues to use Markdown storage.
+PostgreSQL must be enabled explicitly in either the global `~/.pi/agent/settings.json` or the project's `.pi/settings.json`. Setting the `DB_*` environment variables alone does not enable it; without `storage: "postgres"`, pi-ruleset continues to use Markdown storage.
 
 ```json
 {
@@ -141,7 +141,7 @@ The runtime passes the `DB_*` values separately to the PostgreSQL client. `DB_PO
 
 `migration: manual` means the runtime never executes DDL or migration SQL. A database administrator must create the schema and apply the SQL files under `migrations/` before PostgreSQL storage is enabled.
 
-Put the configuration above under the project's `.pi/settings.json`, make the environment variables available to the Pi process, and restart Pi after changing either one. Instances with the same database, schema, and `AGENT_NAME` share rules. Use different agent names for independent rulesets. PostgreSQL mode uses one namespace; `mode`, `rules_dir` and `target` are Markdown concepts (the latter two are rejected in PostgreSQL tools).
+Put the configuration above in `~/.pi/agent/settings.json` for a global default, or in the project's `.pi/settings.json` for a project-specific setting. When both exist, project fields override global fields and nested `postgres`/`user_context` fields are merged. Make the environment variables available to the Pi process, and restart Pi after changing either configuration or environment variables. Instances with the same database, schema, and `AGENT_NAME` share rules. Use different agent names for independent rulesets. PostgreSQL mode uses one namespace; `mode`, `rules_dir` and `target` are Markdown concepts (the latter two are rejected in PostgreSQL tools).
 
 For the existing `agent_ruleset` schema, run in order:
 

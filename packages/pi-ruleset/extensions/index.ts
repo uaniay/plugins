@@ -118,7 +118,7 @@ function projectRulesDir(cwd: string): string | null {
 }
 
 function readRulesetConfig(cwd: string): RulesetConfig {
-  // check project .pi/settings.json first, then fall back to defaults
+  // Merge global settings with project settings; project fields take precedence.
   const projectRoot = (() => {
     let dir = cwd;
     for (let i = 0; i < 10; i++) {
@@ -130,14 +130,28 @@ function readRulesetConfig(cwd: string): RulesetConfig {
     return null;
   })();
 
-  if (projectRoot) {
-    try {
-      const raw = fs.readFileSync(
-        path.join(projectRoot, ".pi", "settings.json"),
-        "utf-8"
-      );
-      const parsed = JSON.parse(raw);
-      const cfg = parsed?.["pi-ruleset"];
+  try {
+      const home = process.env.HOME ?? process.env.USERPROFILE;
+      const globalPath = home ? path.join(home, ".pi", "agent", "settings.json") : null;
+      const projectPath = projectRoot ? path.join(projectRoot, ".pi", "settings.json") : null;
+      const readConfig = (settingsPath: string | null): any =>
+        settingsPath && fs.existsSync(settingsPath)
+          ? JSON.parse(fs.readFileSync(settingsPath, "utf-8"))?.["pi-ruleset"]
+          : undefined;
+      const globalCfg = readConfig(globalPath);
+      const projectCfg = readConfig(projectPath);
+      const cfg = globalCfg || projectCfg
+        ? {
+            ...(globalCfg ?? {}),
+            ...(projectCfg ?? {}),
+            postgres: globalCfg?.postgres || projectCfg?.postgres
+              ? { ...(globalCfg?.postgres ?? {}), ...(projectCfg?.postgres ?? {}) }
+              : undefined,
+            user_context: globalCfg?.user_context || projectCfg?.user_context
+              ? { ...(globalCfg?.user_context ?? {}), ...(projectCfg?.user_context ?? {}) }
+              : undefined,
+          }
+        : undefined;
       const mode = cfg?.mode;
       const validMode: RulesetMode =
         mode === "project-only" || mode === "global-only" || mode === "both"
@@ -159,11 +173,9 @@ function readRulesetConfig(cwd: string): RulesetConfig {
         : undefined;
 
       return { mode: validMode, user_context, storage, postgres };
-    } catch (error) {
-      throw new Error("Invalid pi-ruleset settings: " + (error as Error).message);
-    }
+  } catch (error) {
+    throw new Error("Invalid pi-ruleset settings: " + (error as Error).message);
   }
-  return { mode: "both", storage: "markdown" };
 }
 
 interface ResolvedDirs {

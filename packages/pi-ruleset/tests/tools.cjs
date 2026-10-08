@@ -8,7 +8,7 @@ const extension = require('../dist/index.js').default;
 function harness(storage) {
   const cwd=fs.mkdtempSync(path.join(os.tmpdir(),'ruleset-tools-'));
   fs.mkdirSync(path.join(cwd,'.pi'));
-  fs.writeFileSync(path.join(cwd,'.pi/settings.json'),JSON.stringify({'pi-ruleset':{storage,mode:'project-only',postgres:{schema:'agent_ruleset',namespace:path.basename(cwd)}}}));
+  fs.writeFileSync(path.join(cwd,'.pi/settings.json'),JSON.stringify({'pi-ruleset':{storage,mode:'project-only',postgres:{schema:'agent_ruleset'}}}));
   const tools={},events={};
   extension({registerTool:tool=>tools[tool.name]=tool,on:(name,fn)=>events[name]=fn});
   const ctx={cwd,ui:{notify(){}}};
@@ -36,6 +36,7 @@ test('PostgreSQL tools and async context use database only', {skip:!process.env.
   process.env.DB_USER=decodeURIComponent(testDatabase.username);
   process.env.DB_NAME=decodeURIComponent(testDatabase.pathname.slice(1));
   process.env.DB_PASSWORD=decodeURIComponent(testDatabase.password);
+  process.env.AGENT_NAME=`ruleset-tools-${Date.now()}`;
   const h=harness('postgres');
   try {
     await h.events.session_start({},h.ctx);

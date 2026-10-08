@@ -16,13 +16,13 @@ test('fixed match fields and all wildcard', () => {
 });
 
 test('PostgreSQL configuration requires split DB environment variables', () => {
-  const names = ['DB_HOST','DB_PORT','DB_USER','DB_NAME','DB_PASSWORD'];
+  const names = ['DB_HOST','DB_PORT','DB_USER','DB_NAME','DB_PASSWORD','AGENT_NAME'];
   const previous = Object.fromEntries(names.map(name => [name,process.env[name]]));
   try {
     for (const name of names) delete process.env[name];
-    assert.throws(()=>new PostgresRuleStore({schema:'agent_ruleset',namespace:'test'}),/DB_HOST, DB_PORT, DB_USER, DB_NAME, DB_PASSWORD/);
-    Object.assign(process.env,{DB_HOST:'localhost',DB_PORT:'invalid',DB_USER:'test',DB_NAME:'test',DB_PASSWORD:'test'});
-    assert.throws(()=>new PostgresRuleStore({schema:'agent_ruleset',namespace:'test'}),/DB_PORT must be an integer/);
+    assert.throws(()=>new PostgresRuleStore({schema:'agent_ruleset'}),/DB_HOST, DB_PORT, DB_USER, DB_NAME, DB_PASSWORD, AGENT_NAME/);
+    Object.assign(process.env,{DB_HOST:'localhost',DB_PORT:'invalid',DB_USER:'test',DB_NAME:'test',DB_PASSWORD:'test',AGENT_NAME:'test'});
+    assert.throws(()=>new PostgresRuleStore({schema:'agent_ruleset'}),/DB_PORT must be an integer/);
   } finally {
     for (const name of names) previous[name] === undefined ? delete process.env[name] : process.env[name] = previous[name];
   }
@@ -37,9 +37,12 @@ test('PostgreSQL migrations, CRUD, isolation, concurrency, rollback and referenc
   process.env.DB_USER = decodeURIComponent(testDatabase.username);
   process.env.DB_NAME = decodeURIComponent(testDatabase.pathname.slice(1));
   process.env.DB_PASSWORD = decodeURIComponent(testDatabase.password);
-  const config = {schema:'agent_ruleset',namespace:'test-'+Date.now()};
+  process.env.AGENT_NAME = 'test-'+Date.now();
+  const config = {schema:'agent_ruleset'};
   const store = new PostgresRuleStore(config);
-  const other = new PostgresRuleStore({...config,namespace:config.namespace+'-other'});
+  process.env.AGENT_NAME += '-other';
+  const other = new PostgresRuleStore(config);
+  process.env.AGENT_NAME = process.env.AGENT_NAME.slice(0,-6);
   try {
     await pool.query('CREATE SCHEMA IF NOT EXISTS agent_ruleset');
     for (let round=0;round<2;round++) for (const migration of ['001_init.sql','002_storage.sql','003_remove_priority.sql','004_fixed_match_fields.sql']) {
@@ -83,7 +86,7 @@ test('PostgreSQL migrations, CRUD, isolation, concurrency, rollback and referenc
     await store.update(added.id,{title:'Updated',customer:'B',references:[]},'editor@example.com');
     const updated=await store.get(added.id);
     assert.equal(updated.item_name,'Updated');
-    assert.equal((await pool.query('SELECT item_name FROM agent_ruleset.rules WHERE namespace=$1 AND id=$2',[config.namespace,added.id])).rows[0].item_name,'Updated');
+    assert.equal((await pool.query('SELECT item_name FROM agent_ruleset.rules WHERE namespace=$1 AND id=$2',[process.env.AGENT_NAME,added.id])).rows[0].item_name,'Updated');
     assert.equal(updated.dimensions.customer_name,'B');
     assert.equal(updated.dimensions.facility_name,'F');
     assert.equal(updated.dimensions.item,added.dimensions.item);
@@ -92,8 +95,8 @@ test('PostgreSQL migrations, CRUD, isolation, concurrency, rollback and referenc
     assert.equal(typed.dimensions.facility_name,'Warehouse');
     assert.equal((await store.list(undefined,{customer_id:'C1',facility_id:'F1',cycle:'monthly'})).some(rule=>rule.id===typed.id),true);
     assert.equal((await store.list(undefined,{customer_id:'C2',customer_name:'Acme',facility_id:'F1',cycle:'monthly'})).some(rule=>rule.id===typed.id),false);
-    await assert.rejects(()=>pool.query("UPDATE agent_ruleset.rules SET customer_scope='specific',customer_id=NULL,customer_name=NULL WHERE namespace=$1 AND id=$2",[config.namespace,typed.id]),/rules_customer_identity_chk/);
-    await assert.rejects(()=>pool.query("UPDATE agent_ruleset.rules SET facility_scope='specific',facility_id=NULL,facility_name=NULL WHERE namespace=$1 AND id=$2",[config.namespace,typed.id]),/rules_facility_identity_chk/);
+    await assert.rejects(()=>pool.query("UPDATE agent_ruleset.rules SET customer_scope='specific',customer_id=NULL,customer_name=NULL WHERE namespace=$1 AND id=$2",[process.env.AGENT_NAME,typed.id]),/rules_customer_identity_chk/);
+    await assert.rejects(()=>pool.query("UPDATE agent_ruleset.rules SET facility_scope='specific',facility_id=NULL,facility_name=NULL WHERE namespace=$1 AND id=$2",[process.env.AGENT_NAME,typed.id]),/rules_facility_identity_chk/);
     await store.update(typed.id,{customer_scope:'all',facility_scope:'all'});
     const allScoped=await store.get(typed.id);
     assert.equal(allScoped.dimensions.customer_scope,'all');
@@ -107,7 +110,7 @@ test('PostgreSQL migrations, CRUD, isolation, concurrency, rollback and referenc
     assert.equal(await store.remove(added.id),true);
     assert.equal(await store.get(added.id),null);
     assert.equal(await store.remove(added.id),false);
-    assert.equal((await pool.query('SELECT archived_at FROM agent_ruleset.rules WHERE namespace=$1 AND id=$2',[config.namespace,added.id])).rows[0].archived_at instanceof Date,true);
+    assert.equal((await pool.query('SELECT archived_at FROM agent_ruleset.rules WHERE namespace=$1 AND id=$2',[process.env.AGENT_NAME,added.id])).rows[0].archived_at instanceof Date,true);
     await store.addReference('policy','Policy body');
     assert.equal(await store.getReference('policy'),'Policy body');
     assert.equal(await other.getReference('policy'),null);

@@ -98,16 +98,15 @@ PostgreSQL storage supports add/list/get/update/archive/restore and reference do
     "storage": "postgres",
     "postgres": {
       "schema": "agent_ruleset",
-      "namespace": "billing",
       "migration": "manual"
     }
   }
 }
 ```
 
-Set `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_NAME`, and `DB_PASSWORD` in the process environment. The runtime passes these values separately to the PostgreSQL client; `DB_PORT` must be an integer from 1 through 65535. Apply the SQL files under `migrations/` with a database administrator before enabling PostgreSQL storage.
+Set `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_NAME`, `DB_PASSWORD`, and `AGENT_NAME` in the process environment. The runtime passes the database values separately to the PostgreSQL client and uses `AGENT_NAME` as the ruleset namespace; `DB_PORT` must be an integer from 1 through 65535. Apply the SQL files under `migrations/` with a database administrator before enabling PostgreSQL storage.
 
-Put the configuration above under the project's `.pi/settings.json`. `namespace` is required: instances with the same database, schema and namespace share rules. Use different namespaces for independent projects. PostgreSQL mode uses one namespace; `mode`, `rules_dir` and `target` are Markdown concepts (the latter two are rejected in PostgreSQL tools).
+Put the configuration above under the project's `.pi/settings.json`. Instances with the same database, schema, and `AGENT_NAME` share rules. Use different agent names for independent rulesets. PostgreSQL mode uses one namespace; `mode`, `rules_dir` and `target` are Markdown concepts (the latter two are rejected in PostgreSQL tools).
 
 For the existing `agent_ruleset` schema, run in order:
 

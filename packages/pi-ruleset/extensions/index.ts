@@ -151,12 +151,10 @@ function readRulesetConfig(cwd: string): RulesetConfig {
 
       if (cfg?.storage && !["markdown", "postgres"].includes(cfg.storage)) throw new Error("Unknown storage backend");
       if (cfg?.postgres?.migration && cfg.postgres.migration !== "manual") throw new Error("Only manual migration is supported");
-      if (cfg?.storage === "postgres" && !cfg?.postgres?.namespace?.trim()) throw new Error("Set postgres.namespace explicitly to identify the shared ruleset");
       const storage = cfg?.storage === "postgres" ? "postgres" : "markdown";
       const postgres: PostgresConfig | undefined = storage === "postgres"
         ? {
             schema: cfg?.postgres?.schema ?? "agent_ruleset",
-            namespace: cfg?.postgres?.namespace ?? "project",
           }
         : undefined;
 
@@ -574,7 +572,7 @@ export default function (pi: ExtensionAPI) {
   async function getPostgresStore(cwd: string): Promise<PostgresRuleStore | null> {
     const config = readRulesetConfig(cwd);
     if (config.storage !== "postgres" || !config.postgres) return null;
-    const key = `${process.env.DB_HOST}:${process.env.DB_PORT}:${process.env.DB_USER}:${process.env.DB_NAME}:${config.postgres.schema}:${config.postgres.namespace}`;
+    const key = `${process.env.DB_HOST}:${process.env.DB_PORT}:${process.env.DB_USER}:${process.env.DB_NAME}:${config.postgres.schema}:${process.env.AGENT_NAME}`;
     const existing = postgresStores.get(key);
     if (existing) return existing;
     const store = new PostgresRuleStore(config.postgres);

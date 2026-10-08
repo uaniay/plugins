@@ -29,7 +29,7 @@ test('Markdown add/list/read/update/archive regression with empty scope/tags',as
   } finally {await h.close();}
 });
 
-test('Global PostgreSQL settings merge with project settings',async()=>{
+test('Global PostgreSQL storage remains active when project only overrides mode',async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'ruleset-global-config-'));
   const home=path.join(root,'home');
   const cwd=path.join(root,'project');

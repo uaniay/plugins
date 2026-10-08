@@ -118,57 +118,36 @@ function projectRulesDir(cwd: string): string | null {
 }
 
 function readRulesetConfig(cwd: string): RulesetConfig {
-  // Merge global settings with project settings; project fields take precedence.
-  const projectRoot = (() => {
-    let dir = cwd;
-    for (let i = 0; i < 10; i++) {
-      if (fs.existsSync(path.join(dir, ".pi", "settings.json"))) return dir;
-      const parent = path.dirname(dir);
-      if (parent === dir) break;
-      dir = parent;
-    }
-    return null;
-  })();
-
   try {
       const home = process.env.HOME ?? process.env.USERPROFILE;
       const globalPath = home ? path.join(home, ".pi", "agent", "settings.json") : null;
-      const projectPath = projectRoot ? path.join(projectRoot, ".pi", "settings.json") : null;
+      const projectPath = path.join(cwd, ".pi", "settings.json");
       const readConfig = (settingsPath: string | null): any =>
         settingsPath && fs.existsSync(settingsPath)
           ? JSON.parse(fs.readFileSync(settingsPath, "utf-8"))?.["pi-ruleset"]
           : undefined;
       const globalCfg = readConfig(globalPath);
       const projectCfg = readConfig(projectPath);
-      const cfg = globalCfg || projectCfg
-        ? {
-            ...(globalCfg ?? {}),
-            ...(projectCfg ?? {}),
-            postgres: globalCfg?.postgres || projectCfg?.postgres
-              ? { ...(globalCfg?.postgres ?? {}), ...(projectCfg?.postgres ?? {}) }
-              : undefined,
-            user_context: globalCfg?.user_context || projectCfg?.user_context
-              ? { ...(globalCfg?.user_context ?? {}), ...(projectCfg?.user_context ?? {}) }
-              : undefined,
-          }
-        : undefined;
-      const mode = cfg?.mode;
+      const mode = projectCfg?.mode ?? globalCfg?.mode;
       const validMode: RulesetMode =
         mode === "project-only" || mode === "global-only" || mode === "both"
           ? mode
           : "both";
 
+      const apiBase = projectCfg?.user_context?.api_base ?? globalCfg?.user_context?.api_base;
       const user_context: UserContextConfig | undefined =
-        cfg?.user_context?.api_base
-          ? { api_base: cfg.user_context.api_base }
+        apiBase
+          ? { api_base: apiBase }
           : undefined;
 
-      if (cfg?.storage && !["markdown", "postgres"].includes(cfg.storage)) throw new Error("Unknown storage backend");
-      if (cfg?.postgres?.migration && cfg.postgres.migration !== "manual") throw new Error("Only manual migration is supported");
-      const storage = cfg?.storage === "postgres" ? "postgres" : "markdown";
+      const configuredStorage = projectCfg?.storage ?? globalCfg?.storage;
+      const migration = projectCfg?.postgres?.migration ?? globalCfg?.postgres?.migration;
+      if (configuredStorage && !["markdown", "postgres"].includes(configuredStorage)) throw new Error("Unknown storage backend");
+      if (migration && migration !== "manual") throw new Error("Only manual migration is supported");
+      const storage = configuredStorage === "postgres" ? "postgres" : "markdown";
       const postgres: PostgresConfig | undefined = storage === "postgres"
         ? {
-            schema: cfg?.postgres?.schema ?? "agent_ruleset",
+            schema: projectCfg?.postgres?.schema ?? globalCfg?.postgres?.schema ?? "agent_ruleset",
           }
         : undefined;
 

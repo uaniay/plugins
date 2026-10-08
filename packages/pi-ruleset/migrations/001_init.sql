@@ -22,9 +22,14 @@ CREATE TABLE IF NOT EXISTS agent_ruleset.rules (
   raw_description text,
   conditions jsonb NOT NULL DEFAULT '[]'::jsonb,
   actions jsonb NOT NULL DEFAULT '[]'::jsonb,
-  customer text NOT NULL DEFAULT 'all',
-  facility text NOT NULL DEFAULT 'all',
-  item text NOT NULL,
+  customer_scope text NOT NULL DEFAULT 'all',
+  customer_id text,
+  customer_name text,
+  facility_scope text NOT NULL DEFAULT 'all',
+  facility_id text,
+  facility_name text,
+  item text NOT NULL DEFAULT gen_random_uuid()::text,
+  item_name text GENERATED ALWAYS AS (title) STORED,
   cycle text NOT NULL DEFAULT 'all',
   reference_names jsonb NOT NULL DEFAULT '[]'::jsonb,
   created_at timestamptz NOT NULL,
@@ -32,7 +37,22 @@ CREATE TABLE IF NOT EXISTS agent_ruleset.rules (
   created_by_email text,
   updated_by_email text,
   source text NOT NULL DEFAULT 'postgres',
-  PRIMARY KEY (namespace, id)
+  archived_at timestamptz,
+  PRIMARY KEY (namespace, id),
+  CONSTRAINT rules_customer_identity_chk CHECK (
+    (customer_scope = 'all' AND customer_id IS NULL AND customer_name IS NULL) OR
+    (customer_scope = 'specific' AND
+     (NULLIF(btrim(customer_id), '') IS NOT NULL OR NULLIF(btrim(customer_name), '') IS NOT NULL) AND
+     (customer_id IS NULL OR NULLIF(btrim(customer_id), '') IS NOT NULL) AND
+     (customer_name IS NULL OR NULLIF(btrim(customer_name), '') IS NOT NULL))
+  ),
+  CONSTRAINT rules_facility_identity_chk CHECK (
+    (facility_scope = 'all' AND facility_id IS NULL AND facility_name IS NULL) OR
+    (facility_scope = 'specific' AND
+     (NULLIF(btrim(facility_id), '') IS NOT NULL OR NULLIF(btrim(facility_name), '') IS NOT NULL) AND
+     (facility_id IS NULL OR NULLIF(btrim(facility_id), '') IS NOT NULL) AND
+     (facility_name IS NULL OR NULLIF(btrim(facility_name), '') IS NOT NULL))
+  )
 );
 
 CREATE INDEX IF NOT EXISTS rules_namespace_status_idx

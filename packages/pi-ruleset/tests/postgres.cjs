@@ -23,19 +23,13 @@ test('PostgreSQL migrations, CRUD, isolation, concurrency, rollback and referenc
   const other = new PostgresRuleStore({...config,namespace:config.namespace+'-other'});
   try {
     await pool.query('CREATE SCHEMA IF NOT EXISTS agent_ruleset');
-    const migrationNamespace='legacy-'+Date.now();
-    for (let round=0;round<2;round++) for (const migration of ['001_init.sql','002_storage.sql','003_remove_priority.sql','004_fixed_match_fields.sql','005_generated_item.sql','006_item_name.sql','007_party_identity.sql']) {
+    for (let round=0;round<2;round++) for (const migration of ['001_init.sql','002_storage.sql','003_remove_priority.sql','004_fixed_match_fields.sql']) {
       await pool.query(fs.readFileSync(require('node:path').join(__dirname,'../migrations',migration),'utf8'));
-      if (round===0 && migration==='006_item_name.sql') {
-        await pool.query("INSERT INTO agent_ruleset.rules(namespace,id,title,status,summary,description,customer,facility,item,cycle,created_at,updated_at) VALUES ($1,'001','旧规则','active','旧摘要','旧说明','Legacy Customer','Legacy Facility',gen_random_uuid()::text,'all',now(),now())",[migrationNamespace]);
-      }
     }
-    await pool.query(fs.readFileSync(require('node:path').join(__dirname,'../migrations','007_party_identity.sql'),'utf8'));
+    await pool.query(fs.readFileSync(require('node:path').join(__dirname,'../migrations','004_fixed_match_fields.sql'),'utf8'));
     await store.checkSchema();
-    const migrated=(await pool.query('SELECT customer_scope,customer_id,customer_name,facility_scope,facility_id,facility_name FROM agent_ruleset.rules WHERE namespace=$1',[migrationNamespace])).rows[0];
-    assert.deepEqual(migrated,{customer_scope:'specific',customer_id:null,customer_name:'Legacy Customer',facility_scope:'specific',facility_id:null,facility_name:'Legacy Facility'});
     assert.equal((await pool.query("SELECT is_generated FROM information_schema.columns WHERE table_schema='agent_ruleset' AND table_name='rules' AND column_name='item_name'")).rows[0].is_generated,'ALWAYS');
-    assert.equal((await pool.query("SELECT column_name FROM information_schema.columns WHERE table_schema='agent_ruleset' AND table_name='rules' AND column_name IN ('priority','rule_id','dimension_name')")).rowCount,0);
+    assert.equal((await pool.query("SELECT column_name FROM information_schema.columns WHERE table_schema='agent_ruleset' AND table_name='rules' AND column_name IN ('priority','rule_id','dimension_name','customer','facility','legacy_item')")).rowCount,0);
     const input = {title:'费用规则',summary:'仓库费用',description:'exact original',raw_description:'原始文字\n- 保留',tags:[],conditions:[],actions:[],customer:'A',facility:'F',cycle:'monthly',references:['policy','policy'],created_by_email:'author@example.com'};
     const added = await store.add(input);
     const read = await store.get(added.id);

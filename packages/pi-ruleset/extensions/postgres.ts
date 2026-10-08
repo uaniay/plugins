@@ -186,7 +186,7 @@ export class PostgresRuleStore {
 
   async checkSchema(): Promise<void> {
     const result = await this.pool.query(`SELECT max(version) AS version FROM ${this.table("schema_migrations")}`);
-    if (result.rows[0].version !== 7) throw new Error("pi-ruleset requires schema version 7; apply migrations/001_init.sql through 007_party_identity.sql");
+    if (result.rows[0].version !== 4) throw new Error("pi-ruleset requires schema version 4; apply migrations/001_init.sql through 004_fixed_match_fields.sql");
   }
 
   async update(id: string, patch: Partial<Rule> & Partial<PostgresRuleInput>, email?: string): Promise<Rule | null> {

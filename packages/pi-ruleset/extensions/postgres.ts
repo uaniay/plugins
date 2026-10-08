@@ -5,9 +5,7 @@ import { randomUUID } from "node:crypto";
 export type RuleDimensions = Record<string, string | string[]>;
 
 export interface PostgresConfig {
-  connection_string_env: string;
   schema: string;
-  namespace: string;
 }
 
 export interface PostgresRuleInput {
@@ -107,12 +105,24 @@ export class PostgresRuleStore {
   private readonly namespace: string;
 
   constructor(config: PostgresConfig) {
-    const connectionString = process.env[config.connection_string_env];
-    if (!connectionString) throw new Error(`PostgreSQL storage is enabled but ${config.connection_string_env} is not set`);
+    const requiredEnvironment = ["DB_HOST", "DB_PORT", "DB_USER", "DB_NAME", "DB_PASSWORD"] as const;
+    const missing = requiredEnvironment.filter(name => !process.env[name]);
+    if (missing.length > 0) throw new Error(`PostgreSQL storage is enabled but ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} not set`);
+    const port = Number(process.env.DB_PORT);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("DB_PORT must be an integer between 1 and 65535");
     this.schema = quoteIdentifier(config.schema);
-    this.namespace = config.namespace;
-    if (!config.namespace?.trim()) throw new Error("PostgreSQL namespace is required");
-    this.pool = new Pool({ connectionString, max: 5, connectionTimeoutMillis: 5000, statement_timeout: 15000, idleTimeoutMillis: 10000 });
+    this.namespace = process.env.AGENT_NAME?.trim() || "default";
+    this.pool = new Pool({
+      host: process.env.DB_HOST,
+      port,
+      user: process.env.DB_USER,
+      database: process.env.DB_NAME,
+      password: process.env.DB_PASSWORD,
+      max: 5,
+      connectionTimeoutMillis: 5000,
+      statement_timeout: 15000,
+      idleTimeoutMillis: 10000,
+    });
     this.pool.on("error", () => { /* Failed idle clients are removed by pg. */ });
   }
 

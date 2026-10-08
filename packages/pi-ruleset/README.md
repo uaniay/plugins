@@ -97,26 +97,24 @@ PostgreSQL storage supports add/list/get/update/archive/restore and reference do
   "pi-ruleset": {
     "storage": "postgres",
     "postgres": {
-      "connection_string_env": "PI_RULESET_DATABASE_URL",
       "schema": "agent_ruleset",
-      "namespace": "billing",
       "migration": "manual"
     }
   }
 }
 ```
 
-Set `PI_RULESET_DATABASE_URL` in the process environment. Apply the SQL files under `migrations/` with a database administrator before enabling PostgreSQL storage.
+Set `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_NAME`, and `DB_PASSWORD` in the process environment. The runtime passes the database values separately to the PostgreSQL client and uses `AGENT_NAME` as the ruleset namespace; an unset, empty, or whitespace-only `AGENT_NAME` defaults to `default`. `DB_PORT` must be an integer from 1 through 65535. Apply the SQL files under `migrations/` with a database administrator before enabling PostgreSQL storage.
 
-Put the configuration above under the project's `.pi/settings.json`. `namespace` is required: instances with the same database, schema and namespace share rules. Use different namespaces for independent projects. PostgreSQL mode uses one namespace; `mode`, `rules_dir` and `target` are Markdown concepts (the latter two are rejected in PostgreSQL tools).
+Put the configuration above under the project's `.pi/settings.json`. Instances with the same database, schema, and `AGENT_NAME` share rules. Use different agent names for independent rulesets. PostgreSQL mode uses one namespace; `mode`, `rules_dir` and `target` are Markdown concepts (the latter two are rejected in PostgreSQL tools).
 
 For the existing `agent_ruleset` schema, run in order:
 
 ```sh
-psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_init.sql
-psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/002_storage.sql
-psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/003_remove_priority.sql
-psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/004_fixed_match_fields.sql
+PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f migrations/001_init.sql
+PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f migrations/002_storage.sql
+PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f migrations/003_remove_priority.sql
+PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f migrations/004_fixed_match_fields.sql
 ```
 
 The scripts are transactional and repeatable. A new installation creates the final table directly. Version 4 upgrades an existing empty pre-v4 table to the same layout and removes the obsolete dimension/reference tables; it rejects a nonempty table because there is no old rule data to migrate. PostgreSQL 13+ is required for `gen_random_uuid()`. PostgreSQL stores reference names as JSONB and does not persist priority; the Markdown backend retains its priority format. Runtime requires version 4 and only needs schema USAGE plus SELECT/INSERT/UPDATE/DELETE on its tables (SELECT suffices on schema_migrations); migration credentials may be separate.

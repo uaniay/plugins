@@ -2,7 +2,9 @@
   "name": "pi-ruleset",
   "version": "0.3.1",
   "description": "Store and apply business rules as structured per-day Markdown files with BM25 search",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "author": "uaniay",
   "license": "MIT",
   "repository": {
@@ -11,11 +13,18 @@
     "directory": "packages/pi-ruleset"
   },
   "pi": {
-    "extensions": ["./extensions"],
-    "skills": ["./skills"],
-    "prompts": ["./prompts"]
+    "extensions": [
+      "./extensions/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "prompts": [
+      "./prompts"
+    ]
   },
   "dependencies": {
+    "pg": "^8.16.3",
     "wink-bm25-text-search": "^3.1.2"
   },
   "peerDependencies": {
@@ -26,7 +35,17 @@
     "extensions/",
     "skills/",
     "prompts/",
+    "migrations/",
     "rules/references/",
     "rules/RULES.md"
-  ]
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "test": "npm run build && node --test --test-concurrency=1 tests/*.cjs"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.6",
+    "typescript": "^5.9.3"
+  }
 }

@@ -37,6 +37,14 @@ triggers:
 
 # Ruleset Skill
 
+## PostgreSQL backend
+
+When configured with `storage: postgres`, use the tools for all storage operations. Do not read or write local rule files. `rules_dir` and `target` are Markdown-only; PostgreSQL uses the configured namespace.
+
+Capture arbitrary matching keys in `dimensions`, e.g. `{"customer":["A","B"],"facility":"F001"}`. Use stable business identifiers. Keys combine with AND, values with OR. Pass known task dimensions to list/get; missing required dimensions do not match. Ask for missing task context before applying a scoped rule. Updating dimensions replaces the whole map; `{}` clears it. Never infer that sorting overrides conflicting rules.
+
+`ruleset_remove` archives database rules; `ruleset_restore` restores by ID. Reference documents are stored using `ruleset_add_reference` and read using `ruleset_get_reference`. Creator email is supplied by the authenticated user context, not by the agent. The Markdown directory instructions below apply only to the Markdown backend.
+
 Business rules are stored as individual Markdown files under date-based directories (`./rules/YYYY-MM-DD/`). Rules are automatically injected into every agent turn — full content when fewer than 10 rules are active, index-only when 10 or more.
 
 ---
@@ -172,4 +180,3 @@ rules/
 ## Rule priority
 
 `high` → `medium` → `low`. Rules with `status: inactive` are skipped.
-

@@ -4,6 +4,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as https from "https";
 import * as http from "http";
+import { PostgresRuleStore, matchesDimensions, type PostgresConfig, type RuleDimensions } from "./postgres";
 // @ts-ignore — no bundled types for wink-bm25-text-search
 import bm25 from "wink-bm25-text-search";
 
@@ -11,7 +12,7 @@ import bm25 from "wink-bm25-text-search";
 // Types
 // ---------------------------------------------------------------------------
 
-interface Rule {
+export interface Rule {
   id: string;
   title: string;
   status: "active" | "inactive";
@@ -20,6 +21,9 @@ interface Rule {
   summary: string;
   description: string;
   raw_description?: string;   // original user words, preserved verbatim
+  dimensions?: RuleDimensions;
+  created_by_email?: string;
+  updated_by_email?: string;
   scope?: string[];            // customer IDs or groups this rule applies to; empty = all
   conditions: string[];
   actions: string[];
@@ -65,6 +69,8 @@ interface UserInfo {
 interface RulesetConfig {
   mode: RulesetMode;
   user_context?: UserContextConfig;
+  storage?: "markdown" | "postgres";
+  postgres?: PostgresConfig;
 }
 
 function globalRulesDir(): string {
@@ -121,12 +127,24 @@ function readRulesetConfig(cwd: string): RulesetConfig {
           ? { api_base: cfg.user_context.api_base }
           : undefined;
 
-      return { mode: validMode, user_context };
-    } catch {
-      // malformed settings — fall through to default
+      if (cfg?.storage && !["markdown", "postgres"].includes(cfg.storage)) throw new Error("Unknown storage backend");
+      if (cfg?.postgres?.migration && cfg.postgres.migration !== "manual") throw new Error("Only manual migration is supported");
+      if (cfg?.storage === "postgres" && !cfg?.postgres?.namespace?.trim()) throw new Error("Set postgres.namespace explicitly to identify the shared ruleset");
+      const storage = cfg?.storage === "postgres" ? "postgres" : "markdown";
+      const postgres: PostgresConfig | undefined = storage === "postgres"
+        ? {
+            connection_string_env: cfg?.postgres?.connection_string_env ?? "PI_RULESET_DATABASE_URL",
+            schema: cfg?.postgres?.schema ?? "billing_agent",
+            namespace: cfg?.postgres?.namespace ?? "project",
+          }
+        : undefined;
+
+      return { mode: validMode, user_context, storage, postgres };
+    } catch (error) {
+      throw new Error("Invalid pi-ruleset settings: " + (error as Error).message);
     }
   }
-  return { mode: "both" };
+  return { mode: "both", storage: "markdown" };
 }
 
 interface ResolvedDirs {
@@ -205,8 +223,8 @@ function readIndex(baseDir: string): IndexEntry[] {
   const entries: IndexEntry[] = [];
   for (const line of content.split("\n")) {
     // table row: | id | title | status | priority | tags | summary | scope | file | updated |
-    if (!line.startsWith("|") || line.startsWith("| ID") || line.startsWith("| --")) continue;
-    const cols = line.split("|").map((c) => c.trim()).filter(Boolean);
+    if (!line.startsWith("|") || line.startsWith("| ID") || /^\|[-\s|]+$/.test(line)) continue;
+    const cols = line.split("|").slice(1, -1).map((c) => c.trim());
     if (cols.length < 9) continue;
     entries.push({
       id: cols[0],
@@ -263,6 +281,9 @@ function serializeRule(rule: Rule): string {
     lines.push(`- **Scope:** ${rule.scope.join(", ")}`);
   }
 
+  if (rule.dimensions) lines.push(`- **Dimensions:** ${JSON.stringify(rule.dimensions)}`);
+  if (rule.created_by_email) lines.push(`- **Created by:** ${rule.created_by_email}`);
+  if (rule.updated_by_email) lines.push(`- **Updated by:** ${rule.updated_by_email}`);
   lines.push("", "## Summary", "", rule.summary, "");
 
   if (rule.raw_description) {
@@ -350,9 +371,9 @@ function writeRuleFile(filePath: string, rule: Rule): void {
 function prepTokens(text: string): string[] {
   return text
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .split(/\s+/)
-    .filter((w) => w.length > 2);
+    .flatMap(w => /[\u3400-\u9fff]/.test(w) ? [...w] : [w]).filter(Boolean);
 }
 
 function tagOverlap(a: string[], b: string[]): number {
@@ -370,7 +391,7 @@ function tagOverlap(a: string[], b: string[]): number {
 function buildSimilarityEngine(
   entries: IndexEntry[]
 ): (query: string) => Array<[string, number]> {
-  if (entries.length < 2) return () => [];
+  if (entries.length < 2) return query => entries.filter(entry => prepTokens(query).some(token => prepTokens(entry.title + " " + entry.summary).includes(token))).map(entry => [entry.id, 1]);
 
   const engine = bm25();
   engine.defineConfig({ fldWeights: { title: 3, summary: 2, tags: 2 } });
@@ -392,7 +413,7 @@ function buildSimilarityEngine(
 function buildSemanticEngine(
   rules: Rule[]
 ): (query: string, limit: number) => Array<[string, number]> {
-  if (rules.length < 2) return () => [];
+  if (rules.length < 2) return (query, limit) => rules.filter(rule => prepTokens(query).some(token => prepTokens([rule.title, rule.summary, rule.description].join(" ")).includes(token))).slice(0, limit).map(rule => [rule.id, 1]);
 
   const engine = bm25();
   engine.defineConfig({
@@ -526,6 +547,30 @@ function buildUserContextBlock(user: UserInfo): string {
 export default function (pi: ExtensionAPI) {
   const FULL_INJECT_THRESHOLD = 10;
   const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
+  const postgresStores = new Map<string, PostgresRuleStore>();
+
+  async function getPostgresStore(cwd: string): Promise<PostgresRuleStore | null> {
+    const config = readRulesetConfig(cwd);
+    if (config.storage !== "postgres" || !config.postgres) return null;
+    const key = `${config.postgres.connection_string_env}:${config.postgres.schema}:${config.postgres.namespace}`;
+    const existing = postgresStores.get(key);
+    if (existing) return existing;
+    const store = new PostgresRuleStore(config.postgres);
+    try { await store.checkSchema(); } catch (error) { await store.close(); throw error; }
+    postgresStores.set(key, store);
+    return store;
+  }
+
+  pi.on("session_shutdown", async () => {
+    await Promise.all([...postgresStores.values()].map(store => store.close()));
+    postgresStores.clear();
+  });
+
+  async function actor(cwd: string): Promise<string | undefined> {
+    const config = readRulesetConfig(cwd);
+    const user = config.user_context ? await fetchUserInfo(config.user_context) : null;
+    return typeof user?.email === "string" ? user.email : undefined;
+  }
 
   // Merge entries from multiple dirs — project entries override global entries with same ID.
   function mergeEntries(dirs: string[]): Array<IndexEntry & { sourceDir: string }> {
@@ -551,7 +596,45 @@ export default function (pi: ExtensionAPI) {
   }
 
   // Build the rules block injected into every agent turn.
-  function buildRulesBlock(cwd: string): string | null {
+  async function buildRulesBlock(cwd: string): Promise<string | null> {
+    const postgres = await getPostgresStore(cwd);
+    if (postgres) {
+      const rules = await postgres.list("active");
+      if (rules.length === 0) return null;
+      const sorted = [...rules].sort(
+        (a, b) => (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9)
+      );
+
+      if (sorted.length < FULL_INJECT_THRESHOLD) {
+        const blocks: string[] = [
+          "## Active Business Rules",
+          "",
+          "Apply only rules whose dimensions match the task: AND across dimensions, OR within a dimension. Ask for missing task dimensions before applying scoped rules. Rules are ordered high → medium → low priority; more specific rules sort first within a priority. Report conflicting rules rather than silently overriding them.",
+          "",
+        ];
+        for (const rule of sorted) {
+          blocks.push(serializeRule(rule));
+          blocks.push("---");
+        }
+        return blocks.join("\n");
+      }
+
+      return [
+        "## Active Business Rules (index)",
+        "",
+        `${sorted.length} rules active. Use \`ruleset_get\` with a semantic query to load relevant rules before applying them.`,
+        "Rules apply only when all their dimensions match the task; values within one dimension are alternatives. Missing task dimensions require clarification.",
+        "",
+        "| ID | Title | Priority | Tags | Scope | Summary |",
+        "|----|-------|----------|------|-------|---------|",
+        ...sorted.map(
+          (rule) =>
+            `| ${rule.id} | ${rule.title} | ${rule.priority} | ${rule.tags.join(", ")} | ${JSON.stringify(rule.dimensions ?? {})} | ${rule.summary} |`
+        ),
+        "",
+      ].join("\n");
+    }
+
     const { read } = resolveRulesDirs(cwd);
     const entries = mergeEntries(read).filter((e) => e.status === "active");
     if (entries.length === 0) return null;
@@ -597,8 +680,8 @@ export default function (pi: ExtensionAPI) {
   // Marker injected at the start of every rules block so context event can detect it.
   const RULES_MARKER = "<!-- pi-ruleset -->";
 
-  function buildRulesBlockMarked(cwd: string): string | null {
-    const block = buildRulesBlock(cwd);
+  async function buildRulesBlockMarked(cwd: string): Promise<string | null> {
+    const block = await buildRulesBlock(cwd);
     if (!block) return null;
     return RULES_MARKER + "\n" + block;
   }
@@ -623,7 +706,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    const block = buildRulesBlockMarked(ctx.cwd);
+    const block = await buildRulesBlockMarked(ctx.cwd);
     if (!block && !extra) return;
 
     const append = (block ? "\n\n" + block : "") + extra;
@@ -633,14 +716,26 @@ export default function (pi: ExtensionAPI) {
   // context fires before every provider request.
   // Only inject if rules are not already present — prevents double-injection on normal turns.
   // After compaction the marker disappears from messages, so this re-injects automatically.
-  pi.on("context", (event, ctx) => {
+  pi.on("context", async (event, ctx) => {
     if (messagesHaveRules(event.messages as { role: string; content: unknown }[])) return;
-    const block = buildRulesBlockMarked(ctx.cwd);
+    const block = await buildRulesBlockMarked(ctx.cwd);
     if (!block) return;
-    return { messages: [...event.messages, { role: "user", content: block }] };
+    return { messages: [...event.messages, { role: "user" as const, content: block, timestamp: Date.now() }] };
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
+    const postgres = await getPostgresStore(ctx.cwd);
+    if (postgres) {
+      await postgres.checkSchema();
+      const entries = await postgres.list("active");
+      if (entries.length === 0) {
+        ctx.ui.notify("pi-ruleset: no rules found — run the database migration or use ruleset_add", "info");
+        return;
+      }
+      ctx.ui.notify(`pi-ruleset: ${entries.length} active rule${entries.length > 1 ? "s" : ""} loaded (postgres)`, "info");
+      return;
+    }
+
     const { read, projectDir, globalDir } = resolveRulesDirs(ctx.cwd);
     const entries = mergeEntries(read).filter((e) => e.status === "active");
 
@@ -687,6 +782,11 @@ export default function (pi: ExtensionAPI) {
       scope: Type.Optional(Type.Array(Type.String(), {
         description: "Customer IDs or names this rule applies to. Empty or omit = applies to all customers.",
       })),
+      dimensions: Type.Optional(Type.Record(
+        Type.String(),
+        Type.Union([Type.String(), Type.Array(Type.String())]),
+        { description: "Additional dynamic matching dimensions, e.g. { facility: 'F001', guest: 'G123' }" }
+      )),
       references: Type.Array(Type.String(), {
         default: [],
         description: "Markdown file paths under references/ (e.g. pricing-policy.md)",
@@ -701,6 +801,65 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const postgres = await getPostgresStore(ctx.cwd);
+      if (postgres) {
+        if (params.rules_dir || params.target) throw new Error("PostgreSQL uses configured namespace; rules_dir/target are Markdown-only");
+        const existingRules = await postgres.list("active");
+        if (!params.force) {
+          const candidates = findSimilarRules(
+            params.title,
+            params.summary,
+            params.tags ?? [],
+            existingRules.map((rule) => ({
+              id: rule.id,
+              title: rule.title,
+              status: rule.status,
+              priority: rule.priority,
+              tags: rule.tags,
+              summary: rule.summary,
+              scope: rule.scope,
+              file: "",
+              updated: rule.updated,
+            }))
+          );
+          if (candidates.length > 0) {
+            return { details: {}, content: [{
+                type: "text",
+                text: [
+                  "Similar rules already exist. Please review before deciding:",
+                  "",
+                  candidates.map((c) =>
+                    `- [${c.entry.id}] \"${c.entry.title}\" (score ${Math.round(c.score * 100)}%) — ${c.reasons.join(", ")}\n  Summary: ${c.entry.summary}`
+                  ).join("\n"),
+                  "",
+                  "Call `ruleset_add` again with `force: true` to add a separate rule.",
+                ].join("\n"),
+              }],
+            };
+          }
+        }
+
+        const user = readRulesetConfig(ctx.cwd).user_context
+          ? await fetchUserInfo(readRulesetConfig(ctx.cwd).user_context!)
+          : null;
+        const rule = await postgres.add({
+          title: params.title,
+          summary: params.summary,
+          description: params.description,
+          raw_description: params.raw_description,
+          conditions: params.conditions ?? [],
+          actions: params.actions ?? [],
+          priority: params.priority ?? "medium",
+          tags: params.tags ?? [],
+          scope: params.scope ?? [],
+          dimensions: (params.dimensions ?? {}) as RuleDimensions,
+          references: params.references ?? [],
+          created_by_email: user && typeof user.email === "string" ? user.email : undefined,
+        });
+        return { details: {}, content: [{ type: "text", text: `Rule added: ${rule.id} — ${rule.title}` }] };
+      }
+
+      if (params.dimensions && Object.keys(params.dimensions).length) throw new Error("Dynamic dimensions require PostgreSQL storage");
       const dirs = resolveRulesDirs(ctx.cwd, params.rules_dir);
 
       // target override
@@ -725,8 +884,7 @@ export default function (pi: ExtensionAPI) {
                 `- [${c.entry.id}] "${c.entry.title}" (score ${Math.round(c.score * 100)}%) — ${c.reasons.join(", ")}\n  Summary: ${c.entry.summary}`
             )
             .join("\n");
-          return {
-            content: [{
+          return { details: {}, content: [{
               type: "text",
               text: [
                 "Similar rules already exist. Please review before deciding:",
@@ -787,8 +945,7 @@ export default function (pi: ExtensionAPI) {
       writeIndex(writeDir, writeEntries);
 
       const location = writeDir === dirs.globalDir ? "global" : "project";
-      return {
-        content: [{ type: "text", text: `Rule added: ${id} — ${params.title}` }],
+      return { details: {}, content: [{ type: "text", text: `Rule added: ${id} — ${params.title}` }],
       };
     },
   });
@@ -811,15 +968,24 @@ export default function (pi: ExtensionAPI) {
       priority: Type.Optional(Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")])),
       status: Type.Optional(Type.Union([Type.Literal("active"), Type.Literal("inactive")])),
       tags: Type.Optional(Type.Array(Type.String())),
+      dimensions: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Array(Type.String())]))),
       scope: Type.Optional(Type.Array(Type.String())),
       references: Type.Optional(Type.Array(Type.String())),
       rules_dir: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const postgres = await getPostgresStore(ctx.cwd);
+      if (postgres) {
+        if (params.rules_dir) throw new Error("PostgreSQL uses configured namespace; rules_dir/target are Markdown-only");
+        const rule = await postgres.update(params.id, params, await actor(ctx.cwd));
+        return { details: {}, content: [{type: "text", text: rule ? `Rule updated: ${rule.id} — ${rule.title}` : `Rule not found: ${params.id}`}], isError: !rule };
+      }
+
+      if (params.dimensions) throw new Error("Dynamic dimensions require PostgreSQL storage");
       const { read } = resolveRulesDirs(ctx.cwd, params.rules_dir);
       const sourceDir = findEntryDir(params.id, read);
       if (!sourceDir) {
-        return { content: [{ type: "text", text: `Rule not found: ${params.id}` }], isError: true };
+        return { details: {}, content: [{ type: "text", text: `Rule not found: ${params.id}` }], isError: true };
       }
 
       const entries = readIndex(sourceDir);
@@ -827,7 +993,7 @@ export default function (pi: ExtensionAPI) {
       const fullPath = path.join(sourceDir, entry.file);
       const rule = readRuleFile(fullPath);
       if (!rule) {
-        return { content: [{ type: "text", text: `Rule file missing: ${entry.file}` }], isError: true };
+        return { details: {}, content: [{ type: "text", text: `Rule file missing: ${entry.file}` }], isError: true };
       }
 
       if (params.title !== undefined) rule.title = params.title;
@@ -858,7 +1024,7 @@ export default function (pi: ExtensionAPI) {
       entry.updated = rule.updated;
       writeIndex(sourceDir, entries);
 
-      return { content: [{ type: "text", text: `Rule updated: ${rule.id} — ${rule.title}` }] };
+      return { details: {}, content: [{ type: "text", text: `Rule updated: ${rule.id} — ${rule.title}` }] };
     },
   });
 
@@ -874,10 +1040,17 @@ export default function (pi: ExtensionAPI) {
       rules_dir: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const postgres = await getPostgresStore(ctx.cwd);
+      if (postgres) {
+        if (params.rules_dir) throw new Error("PostgreSQL uses configured namespace; rules_dir/target are Markdown-only");
+        const removed = await postgres.remove(params.id, await actor(ctx.cwd));
+        return { details: {}, content: [{type: "text", text: removed ? `Rule removed: ${params.id} (archived)` : `Rule not found: ${params.id}`}], isError: !removed };
+      }
+
       const { read } = resolveRulesDirs(ctx.cwd, params.rules_dir);
       const sourceDir = findEntryDir(params.id, read);
       if (!sourceDir) {
-        return { content: [{ type: "text", text: `Rule not found: ${params.id}` }], isError: true };
+        return { details: {}, content: [{ type: "text", text: `Rule not found: ${params.id}` }], isError: true };
       }
 
       const entries = readIndex(sourceDir);
@@ -894,7 +1067,7 @@ export default function (pi: ExtensionAPI) {
       entries.splice(idx, 1);
       writeIndex(sourceDir, entries);
 
-      return { content: [{ type: "text", text: `Rule removed: ${entry.id} — ${entry.title} (archived)` }] };
+      return { details: {}, content: [{ type: "text", text: `Rule removed: ${entry.id} — ${entry.title} (archived)` }] };
     },
   });
 
@@ -906,18 +1079,35 @@ export default function (pi: ExtensionAPI) {
     label: "List Rules",
     description: "List all rules from both project and global dirs",
     parameters: Type.Object({
+      dimensions: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Array(Type.String())]))),
       status: Type.Optional(
         Type.Union([Type.Literal("active"), Type.Literal("inactive"), Type.Literal("all")], { default: "all" })
       ),
       rules_dir: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const postgres = await getPostgresStore(ctx.cwd);
+      if (postgres) {
+        if (params.rules_dir) throw new Error("PostgreSQL uses configured namespace; rules_dir/target are Markdown-only");
+        const filter = params.status === "all" ? undefined : params.status ?? undefined;
+        const rules = await postgres.list(filter, params.dimensions);
+        if (rules.length === 0) {
+          return { details: {}, content: [{ type: "text", text: "No rules found." }] };
+        }
+        const lines = rules.map(
+          (rule) =>
+            `[${rule.id}] ${rule.title} | ${rule.status} | ${rule.priority} | dimensions: ${JSON.stringify(rule.dimensions ?? {})}\n    ${rule.summary}`
+        );
+        return { details: {}, content: [{ type: "text", text: lines.join("\n") }] };
+      }
+
+      if (params.dimensions) throw new Error("Dynamic dimensions require PostgreSQL storage");
       const { read } = resolveRulesDirs(ctx.cwd, params.rules_dir);
       const filter = params.status ?? "all";
       const entries = mergeEntries(read).filter((e) => filter === "all" || e.status === filter);
 
       if (entries.length === 0) {
-        return { content: [{ type: "text", text: "No rules found." }] };
+        return { details: {}, content: [{ type: "text", text: "No rules found." }] };
       }
 
       const sorted = [...entries].sort(
@@ -929,7 +1119,7 @@ export default function (pi: ExtensionAPI) {
           `[${e.id}] ${e.title} | ${e.status} | ${e.priority} | scope: ${(e.scope ?? []).join(", ") || "all"}\n    ${e.summary}`
       );
 
-      return { content: [{ type: "text", text: lines.join("\n") }] };
+      return { details: {}, content: [{ type: "text", text: lines.join("\n") }] };
     },
   });
 
@@ -941,25 +1131,63 @@ export default function (pi: ExtensionAPI) {
     label: "Get Rules",
     description: "Retrieve full rule content by ID or semantic query. Searches both project and global dirs.",
     parameters: Type.Object({
+      dimensions: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Array(Type.String())]))),
       id: Type.Optional(Type.String({ description: "Exact rule ID (e.g. 001)" })),
       query: Type.Optional(Type.String({ description: "Natural language query to find relevant rules" })),
-      top_k: Type.Optional(Type.Number({ default: 3 })),
+      top_k: Type.Optional(Type.Integer({ default: 3, minimum: 1, maximum: 100 })),
       rules_dir: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const postgres = await getPostgresStore(ctx.cwd);
+      if (postgres) {
+        if (params.rules_dir) throw new Error("PostgreSQL uses configured namespace; rules_dir/target are Markdown-only");
+        if (params.id) {
+          const rule = await postgres.get(params.id);
+          if (!rule || (params.dimensions && !matchesDimensions(rule.dimensions ?? {}, params.dimensions))) {
+            return { details: {}, content: [{ type: "text", text: `Rule not found: ${params.id}` }], isError: true };
+          }
+          return { details: {}, content: [{ type: "text", text: serializeRule(rule) }] };
+        }
+
+        if (params.query) {
+          const topK = params.top_k ?? 3;
+          const activeRules = await postgres.list("active", params.dimensions);
+          if (activeRules.length === 0) {
+            return { details: {}, content: [{ type: "text", text: "No active rules found." }] };
+          }
+          const search = buildSemanticEngine(activeRules);
+          const results = search(params.query, topK);
+          if (results.length === 0) {
+            return { details: {}, content: [{ type: "text", text: "No matching rules found for query." }] };
+          }
+          const ruleMap = new Map(activeRules.map((rule) => [rule.id, rule]));
+          const blocks = results
+            .map(([id, score]) => {
+              const rule = ruleMap.get(id);
+              if (!rule) return null;
+              return `<!-- relevance score: ${score.toFixed(3)} -->\n${serializeRule(rule)}`;
+            })
+            .filter(Boolean);
+          return { details: {}, content: [{ type: "text", text: blocks.join("\n\n---\n\n") }] };
+        }
+
+        return { details: {}, content: [{ type: "text", text: "Provide either `id` or `query` parameter." }], isError: true };
+      }
+
+      if (params.dimensions) throw new Error("Dynamic dimensions require PostgreSQL storage");
       const { read } = resolveRulesDirs(ctx.cwd, params.rules_dir);
 
       if (params.id) {
         const sourceDir = findEntryDir(params.id, read);
         if (!sourceDir) {
-          return { content: [{ type: "text", text: `Rule not found: ${params.id}` }], isError: true };
+          return { details: {}, content: [{ type: "text", text: `Rule not found: ${params.id}` }], isError: true };
         }
         const entry = readIndex(sourceDir).find((e) => e.id === params.id)!;
         const rule = readRuleFile(path.join(sourceDir, entry.file));
         if (!rule) {
-          return { content: [{ type: "text", text: `Rule file missing: ${entry.file}` }], isError: true };
+          return { details: {}, content: [{ type: "text", text: `Rule file missing: ${entry.file}` }], isError: true };
         }
-        return { content: [{ type: "text", text: serializeRule(rule) }] };
+        return { details: {}, content: [{ type: "text", text: serializeRule(rule) }] };
       }
 
       if (params.query) {
@@ -973,14 +1201,14 @@ export default function (pi: ExtensionAPI) {
         }
 
         if (ruleMap.size === 0) {
-          return { content: [{ type: "text", text: "No active rules found." }] };
+          return { details: {}, content: [{ type: "text", text: "No active rules found." }] };
         }
 
         const search = buildSemanticEngine(Array.from(ruleMap.values()));
         const results = search(params.query, topK);
 
         if (results.length === 0) {
-          return { content: [{ type: "text", text: "No matching rules found for query." }] };
+          return { details: {}, content: [{ type: "text", text: "No matching rules found for query." }] };
         }
 
         const blocks = results
@@ -991,11 +1219,31 @@ export default function (pi: ExtensionAPI) {
           })
           .filter(Boolean);
 
-        return { content: [{ type: "text", text: blocks.join("\n\n---\n\n") }] };
+        return { details: {}, content: [{ type: "text", text: blocks.join("\n\n---\n\n") }] };
       }
 
-      return { content: [{ type: "text", text: "Provide either `id` or `query` parameter." }], isError: true };
+      return { details: {}, content: [{ type: "text", text: "Provide either `id` or `query` parameter." }], isError: true };
     },
+  });
+
+  pi.registerTool({
+    name: "ruleset_get_reference", label: "Read reference", description: "Read a PostgreSQL reference document by name",
+    parameters: Type.Object({name: Type.String()}),
+    async execute(_id, params, _signal, _update, ctx) {
+      const store = await getPostgresStore(ctx.cwd);
+      const content = store ? await store.getReference(params.name) : null;
+      return {details: {}, content: [{type: "text", text: content ?? "Reference not found (this tool requires PostgreSQL storage)"}], isError: content === null};
+    }
+  });
+
+  pi.registerTool({
+    name: "ruleset_restore", label: "Restore rule", description: "Restore an archived PostgreSQL rule by ID",
+    parameters: Type.Object({id: Type.String()}),
+    async execute(_id, params, _signal, _update, ctx) {
+      const store = await getPostgresStore(ctx.cwd);
+      const restored = store ? await store.restore(params.id, await actor(ctx.cwd)) : false;
+      return {details: {}, content: [{type: "text", text: restored ? `Rule restored: ${params.id}` : "Archived rule not found (requires PostgreSQL storage)"}], isError: !restored};
+    }
   });
 
   // -------------------------------------------------------------------------
@@ -1015,6 +1263,12 @@ export default function (pi: ExtensionAPI) {
       rules_dir: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const postgres = await getPostgresStore(ctx.cwd);
+      if (postgres) {
+        if (params.rules_dir || params.target) throw new Error("PostgreSQL uses configured namespace; rules_dir/target are Markdown-only");
+        await postgres.addReference(params.name, params.content);
+        return { details: {}, content: [{type: "text", text: `Reference saved: ${params.name}`}] };
+      }
       const dirs = resolveRulesDirs(ctx.cwd, params.rules_dir);
       let writeDir = dirs.write;
       if (params.target === "global") writeDir = dirs.globalDir;
@@ -1027,8 +1281,7 @@ export default function (pi: ExtensionAPI) {
       const filePath = path.join(refDir, fileName);
       fs.writeFileSync(filePath, params.content, "utf-8");
 
-      return {
-        content: [{
+      return { details: {}, content: [{
           type: "text",
           text: `Reference added: references/${fileName}\nLink with: [${path.basename(fileName, ".md")}](../references/${fileName})`,
         }],

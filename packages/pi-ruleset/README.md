@@ -87,3 +87,54 @@ No order may receive a discount exceeding 30% unless explicitly approved by a ma
 ## Configuration
 
 All tools accept an optional `rules_dir` parameter to use a different base directory, enabling separate rulesets per domain.
+
+## PostgreSQL storage
+
+PostgreSQL storage supports add/list/get/update/archive/restore and reference documents. All queries use the configured schema and namespace. Runtime never executes DDL or falls back to Markdown when a database operation fails.
+
+```json
+{
+  "pi-ruleset": {
+    "storage": "postgres",
+    "postgres": {
+      "connection_string_env": "PI_RULESET_DATABASE_URL",
+      "schema": "billing_agent",
+      "namespace": "billing",
+      "migration": "manual"
+    }
+  }
+}
+```
+
+Set `PI_RULESET_DATABASE_URL` in the process environment. Apply the SQL files under `migrations/` with a database administrator before enabling PostgreSQL storage.
+
+Put the configuration above under the project's `.pi/settings.json`. `namespace` is required: instances with the same database, schema and namespace share rules. Use different namespaces for independent projects. PostgreSQL mode uses one namespace; `mode`, `rules_dir` and `target` are Markdown concepts (the latter two are rejected in PostgreSQL tools).
+
+For the existing `billing_agent` schema, run in order:
+
+```sh
+psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_init.sql
+psql "$PI_RULESET_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/002_storage.sql
+```
+
+Both scripts are transactional and repeatable. If version 1 is already installed, only version 2 is needed. For a different schema, the administrator must adapt both SQL files before applying. Runtime requires version 2 and only needs schema USAGE plus SELECT/INSERT/UPDATE/DELETE on its tables (SELECT suffices on schema_migrations); migration credentials may be separate. Separate schemas avoid name collisions but permissions determine access isolation.
+
+`ruleset_add` and `ruleset_update` accept `dimensions`, for example `{"customer":["A","B"],"facility":"F001"}`. Different dimensions use AND; values within a dimension use OR. `scope` remains an alias for customer. When both are supplied, `dimensions.customer` takes precedence. Updating `dimensions` replaces the entire dimension map; `{}` clears it. Updating only `scope` changes only customer. Empty dimension value arrays are rejected.
+
+Pass the task's `dimensions` to `ruleset_list` or `ruleset_get` to retrieve applicable rules, including unscoped rules. Omit it to inspect all rules. A missing required task dimension does not match. Priority sorts first, then number of dimensions; sorting does not silently override conflicting rules. Context injection shows dimension restrictions, but does not infer customer/facility automatically or provide a deterministic business-rule execution engine.
+
+Creation/update timestamps use UTC instants. Creator/editor email comes from the configured authenticated `user_context` API when available; otherwise it remains unknown (NULL). It is not an access-control mechanism. `ruleset_remove` archives without deleting data; `ruleset_restore` restores a known archived ID. `ruleset_add_reference` stores document content in PostgreSQL; use `ruleset_get_reference` to read it.
+
+Search remains lexical BM25 in memory, with a single-rule fallback and Chinese character tokenization. All namespace candidates are currently loaded, so pagination and database-side search are future scalability improvements. Existing Markdown data is not automatically imported or synchronized.
+
+Validation:
+
+```sh
+npm ci
+npm run typecheck
+npm test
+# Disposable test database ONLY: integration tests create billing_agent tables.
+PI_RULESET_TEST_DATABASE_URL='postgresql://...' npm test
+```
+
+Without the test URL, integration cases are skipped. Never point the test URL at the shared production database.

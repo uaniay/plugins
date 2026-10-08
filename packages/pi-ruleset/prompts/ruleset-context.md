@@ -6,6 +6,6 @@ When this package is active, always check for a rule file before executing tasks
 - data validation or formatting
 - workflow routing or approval chains
 
-Rule file location: `{rules_dir}/{rules_file}.md` (defaults to `./rules/rules.md`).
+Use `ruleset_list` and `ruleset_get` to access the configured storage backend. For PostgreSQL, pass known customer/facility and other task dimensions. For Markdown, rules live in project `.pi/rules/` and/or global `~/.pi/agent/rules/` according to configuration.
 
-If a matching rule exists, apply it silently. Only surface the rule to the user if it changes the expected outcome or creates a conflict.
+Apply rules only when all required dimensions match (alternatives within one dimension use OR). Ask for missing task dimensions. Surface conflicts and rules that change the expected outcome.

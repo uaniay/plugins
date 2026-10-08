@@ -15,10 +15,29 @@ test('fixed match fields and all wildcard', () => {
   assert.equal(matchesDimensions({customer_scope:'specific',customer_id:'C1',customer_name:'Acme',facility_scope:'all',cycle:'all'}, {customer_name:'Acme'}),true);
 });
 
+test('PostgreSQL configuration requires split DB environment variables', () => {
+  const names = ['DB_HOST','DB_PORT','DB_USER','DB_NAME','DB_PASSWORD'];
+  const previous = Object.fromEntries(names.map(name => [name,process.env[name]]));
+  try {
+    for (const name of names) delete process.env[name];
+    assert.throws(()=>new PostgresRuleStore({schema:'agent_ruleset',namespace:'test'}),/DB_HOST, DB_PORT, DB_USER, DB_NAME, DB_PASSWORD/);
+    Object.assign(process.env,{DB_HOST:'localhost',DB_PORT:'invalid',DB_USER:'test',DB_NAME:'test',DB_PASSWORD:'test'});
+    assert.throws(()=>new PostgresRuleStore({schema:'agent_ruleset',namespace:'test'}),/DB_PORT must be an integer/);
+  } finally {
+    for (const name of names) previous[name] === undefined ? delete process.env[name] : process.env[name] = previous[name];
+  }
+});
+
 test('PostgreSQL migrations, CRUD, isolation, concurrency, rollback and references', {skip:!process.env.PI_RULESET_TEST_DATABASE_URL}, async () => {
   // Only run against a disposable database: this test creates the agent_ruleset schema.
   const pool = new Pool({connectionString:process.env.PI_RULESET_TEST_DATABASE_URL});
-  const config = {connection_string_env:'PI_RULESET_TEST_DATABASE_URL',schema:'agent_ruleset',namespace:'test-'+Date.now()};
+  const testDatabase = new URL(process.env.PI_RULESET_TEST_DATABASE_URL);
+  process.env.DB_HOST = testDatabase.hostname;
+  process.env.DB_PORT = testDatabase.port || '5432';
+  process.env.DB_USER = decodeURIComponent(testDatabase.username);
+  process.env.DB_NAME = decodeURIComponent(testDatabase.pathname.slice(1));
+  process.env.DB_PASSWORD = decodeURIComponent(testDatabase.password);
+  const config = {schema:'agent_ruleset',namespace:'test-'+Date.now()};
   const store = new PostgresRuleStore(config);
   const other = new PostgresRuleStore({...config,namespace:config.namespace+'-other'});
   try {

@@ -26,7 +26,13 @@ jobs:
       - name: Install dependencies
         run: |
           cd packages/${{ inputs.package }}
-          npm install
+          npm ci
+
+      - name: Test and inspect package
+        run: |
+          cd packages/${{ inputs.package }}
+          npm test
+          npm pack --dry-run
 
       - name: Publish
         run: |

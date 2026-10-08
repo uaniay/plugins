@@ -1,7 +1,7 @@
 ---
 name: ruleset
 description: Manage business rules in PostgreSQL or per-day Markdown files with BM25 retrieval
-version: 0.3.1
+version: 0.4.0
 triggers:
   - add rule
   - remove rule

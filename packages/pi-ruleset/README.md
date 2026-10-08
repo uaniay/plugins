@@ -5,7 +5,7 @@ A Pi package for storing, managing, and applying business rules as structured pe
 ## Install
 
 ```
-pi install ./packages/pi-ruleset
+pi install pi-ruleset@latest
 ```
 
 ## Features

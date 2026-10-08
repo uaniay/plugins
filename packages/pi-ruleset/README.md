@@ -97,14 +97,26 @@ PostgreSQL storage supports add/list/get/update/archive/restore and reference do
   "pi-ruleset": {
     "storage": "postgres",
     "postgres": {
-      "schema": "agent_ruleset",
       "migration": "manual"
     }
   }
 }
 ```
 
-Set `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_NAME`, and `DB_PASSWORD` in the process environment. The runtime passes the database values separately to the PostgreSQL client and uses `AGENT_NAME` as the ruleset namespace; an unset, empty, or whitespace-only `AGENT_NAME` defaults to `default`. `DB_PORT` must be an integer from 1 through 65535. Apply the SQL files under `migrations/` with a database administrator before enabling PostgreSQL storage.
+Set the connection fields separately in the process environment:
+
+```sh
+DB_HOST=bnp-prod-pgsql.czks4iqomak3.us-west-2.rds.amazonaws.com
+DB_PORT=5432
+DB_USER=aurora_user
+DB_NAME=aurora
+DB_PASSWORD=your-password
+AGENT_NAME=default
+```
+
+The runtime passes the `DB_*` values separately to the PostgreSQL client. `DB_PORT` must be an integer from 1 through 65535. `AGENT_NAME` is used as the ruleset namespace; when it is unset, empty, or whitespace-only, the namespace defaults to `default`. The PostgreSQL schema defaults to `agent_ruleset` when omitted from the configuration.
+
+`migration: manual` means the runtime never executes DDL or migration SQL. A database administrator must create the schema and apply the SQL files under `migrations/` before PostgreSQL storage is enabled.
 
 Put the configuration above under the project's `.pi/settings.json`. Instances with the same database, schema, and `AGENT_NAME` share rules. Use different agent names for independent rulesets. PostgreSQL mode uses one namespace; `mode`, `rules_dir` and `target` are Markdown concepts (the latter two are rejected in PostgreSQL tools).
 

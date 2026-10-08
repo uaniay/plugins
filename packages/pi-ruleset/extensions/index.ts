@@ -95,6 +95,22 @@ interface RulesetConfig {
   postgres?: PostgresConfig;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deepMergeJson<T extends Record<string, unknown>>(base: T, override: Record<string, unknown>): T {
+  const result: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    if (["__proto__", "prototype", "constructor"].includes(key)) continue;
+    const current = result[key];
+    result[key] = isPlainObject(current) && isPlainObject(value)
+      ? deepMergeJson(current, value)
+      : value;
+  }
+  return result as T;
+}
+
 function globalRulesDir(): string {
   const home = process.env.HOME ?? process.env.USERPROFILE ?? "~";
   return path.join(home, ".pi", "agent", "rules");
@@ -128,26 +144,30 @@ function readRulesetConfig(cwd: string): RulesetConfig {
           : undefined;
       const globalCfg = readConfig(globalPath);
       const projectCfg = readConfig(projectPath);
-      const mode = projectCfg?.mode ?? globalCfg?.mode;
+      const cfg = deepMergeJson(
+        isPlainObject(globalCfg) ? globalCfg : {},
+        isPlainObject(projectCfg) ? projectCfg : {},
+      ) as any;
+      const mode = cfg.mode;
       const validMode: RulesetMode =
         mode === "project-only" || mode === "global-only" || mode === "both"
           ? mode
           : "both";
 
-      const apiBase = projectCfg?.user_context?.api_base ?? globalCfg?.user_context?.api_base;
+      const apiBase = cfg.user_context?.api_base;
       const user_context: UserContextConfig | undefined =
         apiBase
           ? { api_base: apiBase }
           : undefined;
 
-      const configuredStorage = projectCfg?.storage ?? globalCfg?.storage;
-      const migration = projectCfg?.postgres?.migration ?? globalCfg?.postgres?.migration;
+      const configuredStorage = cfg.storage;
+      const migration = cfg.postgres?.migration;
       if (configuredStorage && !["markdown", "postgres"].includes(configuredStorage)) throw new Error("Unknown storage backend");
       if (migration && migration !== "manual") throw new Error("Only manual migration is supported");
       const storage = configuredStorage === "postgres" ? "postgres" : "markdown";
       const postgres: PostgresConfig | undefined = storage === "postgres"
         ? {
-            schema: projectCfg?.postgres?.schema ?? globalCfg?.postgres?.schema ?? "agent_ruleset",
+            schema: cfg.postgres?.schema ?? "agent_ruleset",
           }
         : undefined;
 

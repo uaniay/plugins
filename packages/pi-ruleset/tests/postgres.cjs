@@ -20,10 +20,24 @@ test('PostgreSQL configuration requires split DB environment variables', () => {
   const previous = Object.fromEntries(names.map(name => [name,process.env[name]]));
   try {
     for (const name of names) delete process.env[name];
-    assert.throws(()=>new PostgresRuleStore({schema:'agent_ruleset'}),/DB_HOST, DB_PORT, DB_USER, DB_NAME, DB_PASSWORD, AGENT_NAME/);
+    assert.throws(()=>new PostgresRuleStore({schema:'agent_ruleset'}),/DB_HOST, DB_PORT, DB_USER, DB_NAME, DB_PASSWORD/);
     Object.assign(process.env,{DB_HOST:'localhost',DB_PORT:'invalid',DB_USER:'test',DB_NAME:'test',DB_PASSWORD:'test',AGENT_NAME:'test'});
     assert.throws(()=>new PostgresRuleStore({schema:'agent_ruleset'}),/DB_PORT must be an integer/);
   } finally {
+    for (const name of names) previous[name] === undefined ? delete process.env[name] : process.env[name] = previous[name];
+  }
+});
+
+test('PostgreSQL namespace defaults to default when AGENT_NAME is blank', async () => {
+  const names = ['DB_HOST','DB_PORT','DB_USER','DB_NAME','DB_PASSWORD','AGENT_NAME'];
+  const previous = Object.fromEntries(names.map(name => [name,process.env[name]]));
+  let store;
+  try {
+    Object.assign(process.env,{DB_HOST:'localhost',DB_PORT:'5432',DB_USER:'test',DB_NAME:'test',DB_PASSWORD:'test',AGENT_NAME:'   '});
+    store = new PostgresRuleStore({schema:'agent_ruleset'});
+    assert.equal(store.namespace,'default');
+  } finally {
+    await store?.close();
     for (const name of names) previous[name] === undefined ? delete process.env[name] : process.env[name] = previous[name];
   }
 });

@@ -95,6 +95,22 @@ interface RulesetConfig {
   postgres?: PostgresConfig;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deepMergeJson<T extends Record<string, unknown>>(base: T, override: Record<string, unknown>): T {
+  const result: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    if (["__proto__", "prototype", "constructor"].includes(key)) continue;
+    const current = result[key];
+    result[key] = isPlainObject(current) && isPlainObject(value)
+      ? deepMergeJson(current, value)
+      : value;
+  }
+  return result as T;
+}
+
 function globalRulesDir(): string {
   const home = process.env.HOME ?? process.env.USERPROFILE ?? "~";
   return path.join(home, ".pi", "agent", "rules");
@@ -118,52 +134,49 @@ function projectRulesDir(cwd: string): string | null {
 }
 
 function readRulesetConfig(cwd: string): RulesetConfig {
-  // check project .pi/settings.json first, then fall back to defaults
-  const projectRoot = (() => {
-    let dir = cwd;
-    for (let i = 0; i < 10; i++) {
-      if (fs.existsSync(path.join(dir, ".pi", "settings.json"))) return dir;
-      const parent = path.dirname(dir);
-      if (parent === dir) break;
-      dir = parent;
-    }
-    return null;
-  })();
-
-  if (projectRoot) {
-    try {
-      const raw = fs.readFileSync(
-        path.join(projectRoot, ".pi", "settings.json"),
-        "utf-8"
-      );
-      const parsed = JSON.parse(raw);
-      const cfg = parsed?.["pi-ruleset"];
-      const mode = cfg?.mode;
+  try {
+      const home = process.env.HOME ?? process.env.USERPROFILE;
+      const globalPath = home ? path.join(home, ".pi", "agent", "settings.json") : null;
+      const projectPath = path.join(cwd, ".pi", "settings.json");
+      const readConfig = (settingsPath: string | null): any =>
+        settingsPath && fs.existsSync(settingsPath)
+          ? JSON.parse(fs.readFileSync(settingsPath, "utf-8"))?.["pi-ruleset"]
+          : undefined;
+      const globalCfg = readConfig(globalPath);
+      const projectCfg = readConfig(projectPath);
+      const cfg = deepMergeJson(
+        isPlainObject(globalCfg) ? globalCfg : {},
+        isPlainObject(projectCfg) ? projectCfg : {},
+      ) as any;
+      const mode = cfg.mode;
       const validMode: RulesetMode =
         mode === "project-only" || mode === "global-only" || mode === "both"
           ? mode
           : "both";
 
+      const apiBase = cfg.user_context?.api_base;
       const user_context: UserContextConfig | undefined =
-        cfg?.user_context?.api_base
-          ? { api_base: cfg.user_context.api_base }
+        apiBase
+          ? { api_base: apiBase }
           : undefined;
 
-      if (cfg?.storage && !["markdown", "postgres"].includes(cfg.storage)) throw new Error("Unknown storage backend");
-      if (cfg?.postgres?.migration && cfg.postgres.migration !== "manual") throw new Error("Only manual migration is supported");
-      const storage = cfg?.storage === "postgres" ? "postgres" : "markdown";
+      const configuredStorage = cfg.storage;
+      const migration = cfg.postgres?.migration;
+      if (configuredStorage && !["markdown", "postgres"].includes(configuredStorage)) throw new Error("Unknown storage backend");
+      if (migration && migration !== "manual") throw new Error("Only manual migration is supported");
+      const storage = configuredStorage === "postgres" ? "postgres" : "markdown";
       const postgres: PostgresConfig | undefined = storage === "postgres"
         ? {
-            schema: cfg?.postgres?.schema ?? "agent_ruleset",
+            schema: cfg.postgres?.schema ?? "agent_ruleset",
+            sslmode: cfg.postgres?.sslmode,
+            ssl_ca_file: cfg.postgres?.ssl_ca_file,
           }
         : undefined;
 
       return { mode: validMode, user_context, storage, postgres };
-    } catch (error) {
-      throw new Error("Invalid pi-ruleset settings: " + (error as Error).message);
-    }
+  } catch (error) {
+    throw new Error("Invalid pi-ruleset settings: " + (error as Error).message);
   }
-  return { mode: "both", storage: "markdown" };
 }
 
 interface ResolvedDirs {
@@ -572,7 +585,7 @@ export default function (pi: ExtensionAPI) {
   async function getPostgresStore(cwd: string): Promise<PostgresRuleStore | null> {
     const config = readRulesetConfig(cwd);
     if (config.storage !== "postgres" || !config.postgres) return null;
-    const key = `${process.env.DB_HOST}:${process.env.DB_PORT}:${process.env.DB_USER}:${process.env.DB_NAME}:${config.postgres.schema}:${process.env.AGENT_NAME}`;
+    const key = `${process.env.DB_HOST}:${process.env.DB_PORT}:${process.env.DB_USER}:${process.env.DB_NAME}:${config.postgres.schema}:${process.env.AGENT_NAME}:${config.postgres.sslmode ?? process.env.PGSSLMODE ?? "disable"}:${config.postgres.ssl_ca_file ?? ""}`;
     const existing = postgresStores.get(key);
     if (existing) return existing;
     const store = new PostgresRuleStore(config.postgres);

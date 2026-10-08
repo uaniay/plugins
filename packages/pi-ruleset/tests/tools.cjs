@@ -29,6 +29,31 @@ test('Markdown add/list/read/update/archive regression with empty scope/tags',as
   } finally {await h.close();}
 });
 
+test('Global PostgreSQL storage remains active when project only overrides mode',async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'ruleset-global-config-'));
+  const home=path.join(root,'home');
+  const cwd=path.join(root,'project');
+  const previousHome=process.env.HOME;
+  const previousHost=process.env.DB_HOST;
+  fs.mkdirSync(path.join(home,'.pi/agent'),{recursive:true});
+  fs.mkdirSync(path.join(cwd,'.pi'),{recursive:true});
+  fs.writeFileSync(path.join(home,'.pi/agent/settings.json'),JSON.stringify({'pi-ruleset':{storage:'postgres',postgres:{migration:'manual'}}}));
+  fs.writeFileSync(path.join(cwd,'.pi/settings.json'),JSON.stringify({'pi-ruleset':{mode:'project-only'}}));
+  process.env.HOME=home;
+  delete process.env.DB_HOST;
+  const tools={},events={};
+  extension({registerTool:tool=>tools[tool.name]=tool,on:(name,fn)=>events[name]=fn});
+  const ctx={cwd,ui:{notify(){}}};
+  try {
+    await assert.rejects(()=>events.session_start({},ctx),/DB_HOST/);
+  } finally {
+    await events.session_shutdown();
+    previousHome === undefined ? delete process.env.HOME : process.env.HOME=previousHome;
+    previousHost === undefined ? delete process.env.DB_HOST : process.env.DB_HOST=previousHost;
+    fs.rmSync(root,{recursive:true,force:true});
+  }
+});
+
 test('PostgreSQL tools and async context use database only', {skip:!process.env.PI_RULESET_TEST_DATABASE_URL}, async()=>{
   const testDatabase=new URL(process.env.PI_RULESET_TEST_DATABASE_URL);
   process.env.DB_HOST=testDatabase.hostname;

@@ -1,6 +1,8 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const {Pool} = require('pg');
 const {PostgresRuleStore, matchesDimensions} = require('../dist/postgres.js');
 
@@ -38,6 +40,32 @@ test('PostgreSQL namespace defaults to default when AGENT_NAME is blank', async 
     assert.equal(store.namespace,'default');
   } finally {
     await store?.close();
+    for (const name of names) previous[name] === undefined ? delete process.env[name] : process.env[name] = previous[name];
+  }
+});
+
+test('PostgreSQL SSL modes map to pg TLS options', async () => {
+  const names = ['DB_HOST','DB_PORT','DB_USER','DB_NAME','DB_PASSWORD','PGSSLMODE'];
+  const previous = Object.fromEntries(names.map(name => [name,process.env[name]]));
+  const caFile = path.join(os.tmpdir(),`ruleset-rds-ca-${process.pid}.pem`);
+  const stores = [];
+  try {
+    Object.assign(process.env,{DB_HOST:'localhost',DB_PORT:'5432',DB_USER:'test',DB_NAME:'test',DB_PASSWORD:'test'});
+    fs.writeFileSync(caFile,'test-ca');
+    const required = new PostgresRuleStore({schema:'agent_ruleset',sslmode:'require'});
+    stores.push(required);
+    assert.equal(required.pool.options.ssl.rejectUnauthorized,false);
+    const verifyCa = new PostgresRuleStore({schema:'agent_ruleset',sslmode:'verify-ca',ssl_ca_file:caFile});
+    stores.push(verifyCa);
+    assert.equal(verifyCa.pool.options.ssl.ca,'test-ca');
+    assert.equal(typeof verifyCa.pool.options.ssl.checkServerIdentity,'function');
+    const verifyFull = new PostgresRuleStore({schema:'agent_ruleset',sslmode:'verify-full',ssl_ca_file:caFile});
+    stores.push(verifyFull);
+    assert.equal(verifyFull.pool.options.ssl.rejectUnauthorized,true);
+    assert.equal(verifyFull.pool.options.ssl.checkServerIdentity,undefined);
+  } finally {
+    await Promise.all(stores.map(store=>store.close()));
+    fs.rmSync(caFile,{force:true});
     for (const name of names) previous[name] === undefined ? delete process.env[name] : process.env[name] = previous[name];
   }
 });

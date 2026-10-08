@@ -92,9 +92,12 @@ All tools accept an optional `rules_dir` parameter to use a different base direc
 
 PostgreSQL storage supports add/list/get/update/archive/restore and reference documents. All queries use the configured schema and namespace. Runtime never executes DDL or falls back to Markdown when a database operation fails.
 
+PostgreSQL must be enabled explicitly in the project's `.pi/settings.json`. Setting the `DB_*` environment variables alone does not enable it; without `storage: "postgres"`, pi-ruleset continues to use Markdown storage.
+
 ```json
 {
   "pi-ruleset": {
+    "mode": "project-only",
     "storage": "postgres",
     "postgres": {
       "migration": "manual"
@@ -102,6 +105,26 @@ PostgreSQL storage supports add/list/get/update/archive/restore and reference do
   }
 }
 ```
+
+### Configuration fields
+
+| Field | Required | Default | Description |
+|---|---:|---|---|
+| `pi-ruleset.storage` | Yes | `markdown` | Set to `postgres` to enable PostgreSQL. |
+| `pi-ruleset.postgres.schema` | No | `agent_ruleset` | PostgreSQL schema containing the ruleset tables. The bundled migrations use `agent_ruleset`. |
+| `pi-ruleset.postgres.migration` | No | — | The only accepted value is `manual`; the runtime never executes migrations automatically. |
+| `pi-ruleset.mode` | No | `both` | Markdown read/write scope. PostgreSQL always uses the namespace derived from `AGENT_NAME`. |
+
+### Environment variables
+
+| Variable | Required | Default | Description |
+|---|---:|---|---|
+| `DB_HOST` | Yes | — | PostgreSQL server hostname. |
+| `DB_PORT` | Yes | — | PostgreSQL port, as an integer from 1 through 65535. |
+| `DB_USER` | Yes | — | PostgreSQL user. |
+| `DB_NAME` | Yes | — | PostgreSQL database name. |
+| `DB_PASSWORD` | Yes | — | PostgreSQL password. |
+| `AGENT_NAME` | No | `default` | Logical ruleset namespace. Empty and whitespace-only values also use `default`. |
 
 Set the connection fields separately in the process environment:
 
@@ -118,7 +141,7 @@ The runtime passes the `DB_*` values separately to the PostgreSQL client. `DB_PO
 
 `migration: manual` means the runtime never executes DDL or migration SQL. A database administrator must create the schema and apply the SQL files under `migrations/` before PostgreSQL storage is enabled.
 
-Put the configuration above under the project's `.pi/settings.json`. Instances with the same database, schema, and `AGENT_NAME` share rules. Use different agent names for independent rulesets. PostgreSQL mode uses one namespace; `mode`, `rules_dir` and `target` are Markdown concepts (the latter two are rejected in PostgreSQL tools).
+Put the configuration above under the project's `.pi/settings.json`, make the environment variables available to the Pi process, and restart Pi after changing either one. Instances with the same database, schema, and `AGENT_NAME` share rules. Use different agent names for independent rulesets. PostgreSQL mode uses one namespace; `mode`, `rules_dir` and `target` are Markdown concepts (the latter two are rejected in PostgreSQL tools).
 
 For the existing `agent_ruleset` schema, run in order:
 

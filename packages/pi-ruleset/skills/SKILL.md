@@ -1,41 +1,62 @@
 ---
 name: ruleset
-description: Manage business rules in PostgreSQL or per-day Markdown files with BM25 retrieval
+description: Manage billing rules that govern how charges are calculated or stored — invoice line items, fee computation, billing item matching, storage cost rules
 version: 0.4.0
 triggers:
-  - add rule
-  - remove rule
-  - delete rule
-  - update rule
-  - list rules
-  - show rules
-  - apply rules
-  - check rules
-  - get rule
-  - find rule
-  - record this as a rule
-  - save this rule
-  - remember this rule
-  - this should be a rule
-  - make this a rule
-  - note this rule
-  - according to the rule
-  - based on the rule
-  - follow the rule
-  - use the rule
-  - apply the rule
-  - per the rule
-  - as per our rule
-  - rule says
-  - 根据规则
-  - 按照规则
-  - 依据规则
-  - 用规则计算
-  - 规则要求
-  - 规则规定
+  - billing rule
+  - billing rules
+  - add billing rule
+  - remove billing rule
+  - delete billing rule
+  - update billing rule
+  - list billing rules
+  - show billing rules
+  - apply billing rules
+  - check billing rules
+  - get billing rule
+  - find billing rule
+  - record this as a billing rule
+  - save this billing rule
+  - remember this billing rule
+  - this should be a billing rule
+  - make this a billing rule
+  - note this billing rule
+  - according to the billing rule
+  - based on the billing rule
+  - follow the billing rule
+  - use the billing rule
+  - apply the billing rule
+  - per the billing rule
+  - as per our billing rule
+  - billing rule says
+  - invoice rule
+  - charge rule
+  - fee rule
+  - storage billing rule
+  - billing handling rule
+  - 计费规则
+  - 账单规则
+  - 根据计费规则
+  - 按照计费规则
+  - 依据计费规则
+  - 用计费规则计算
+  - 计费规则要求
+  - 计费规则规定
+  - 仓储计费规则
+  - 账单处理规则
 ---
 
 # Ruleset Skill
+
+This skill manages **billing rules only** — rules that govern how charges are calculated (billing handling) or how billing amounts are persisted/computed (billing storage). Do not use this skill for general business logic, permissions, workflow routing, or any domain unrelated to billing.
+
+## Scope
+
+Rules stored here must relate to one of:
+- **Billing handling**: how invoice line items are computed, fee schedules, billing item matching, charge calculation logic
+- **Billing storage**: how billing amounts are stored, aggregated, or carried between cycles
+
+Do not create rules for access control, UI behavior, data validation unrelated to billing, or general workflow decisions.
 
 ## PostgreSQL backend
 
@@ -45,17 +66,19 @@ PostgreSQL rules match on customer, facility, and cycle. Customer and facility e
 
 `ruleset_remove` archives database rules; `ruleset_restore` restores by ID. Reference documents are stored using `ruleset_add_reference` and read using `ruleset_get_reference`. Creator email is supplied by the authenticated user context, not by the agent. The Markdown directory instructions below apply only to the Markdown backend.
 
-Business rules are stored as individual Markdown files under date-based directories (`./rules/YYYY-MM-DD/`). Rules are automatically injected into every agent turn — full content when fewer than 10 rules are active, index-only when 10 or more.
+Billing rules are stored as individual Markdown files under date-based directories (`./rules/YYYY-MM-DD/`). Rules are automatically injected into every agent turn — full content when fewer than 10 rules are active, index-only when 10 or more.
 
 ---
 
 ## Conversational rule capture
 
 When the user says something like:
-- "记录一条规则：所有退款必须在 24 小时内处理"
-- "这应该作为规则保存下来"
-- "以后遇到这种情况都要这样处理"
-- "remember this rule" / "save this as a rule"
+- "记录一条计费规则：material 费用按 QTY 分段计算"
+- "这个计费逻辑应该保存为规则"
+- "以后这种 billing 情况都要这样处理"
+- "remember this billing rule" / "save this as a billing rule"
+
+Only capture if the rule governs billing handling or billing storage. If the user's statement is about something other than billing, do not call `ruleset_add`.
 
 Extract the intent and call `ruleset_add` with:
 - `title`: short imperative phrase
@@ -73,10 +96,12 @@ If `conditions` or `actions` were left empty, mention: _"Conditions/Actions are 
 
 ## Domain-language rule capture
 
-When the user describes logic using domain/technical terms without standard "if/then" structure, such as:
+When the user describes billing logic using domain/technical terms without standard "if/then" structure, such as:
 - "small parcel processing 是针对 activity report 中 material 表里对应的不同规格 ID 对应的 QTY 来计算的"
 - "针对 ClientA 的折扣按照 tier 2 pricing 算"
-- "根据这个特殊逻辑去比对"
+- "根据这个特殊计费逻辑去比对"
+
+Only capture if the described logic governs billing handling or billing storage. If the domain is unrelated to billing calculation or storage, do not create a rule.
 
 1. Save `raw_description` as the user's exact words — never rephrase or discard
 2. Extract what is known into structured fields: `title`, `summary`, `tags`, data sources in `description`

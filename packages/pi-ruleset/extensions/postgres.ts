@@ -19,11 +19,12 @@ export interface PostgresRuleInput {
   conditions: string[];
   actions: string[];
   tags: string[];
-  customer?: string; // Legacy shorthand, interpreted as a name.
+  billing_type: "handling" | "storage";
+  customer?: string;
   customer_scope?: "all" | "specific";
   customer_id?: string;
   customer_name?: string;
-  facility?: string; // Legacy shorthand, interpreted as a name.
+  facility?: string;
   facility_scope?: "all" | "specific";
   facility_id?: string;
   facility_name?: string;
@@ -154,6 +155,7 @@ export class PostgresRuleStore {
       id: row.id, title: row.title, item_name: row.item_name, status: row.status, priority: "medium",
       tags: asStringArray(row.tags), summary: row.summary, description: row.description,
       raw_description: row.raw_description ?? undefined, scope: scopeFromCustomer(partyFromRow(row, "customer")), dimensions,
+      billing_type: row.billing_type as "handling" | "storage",
       created_by_email: row.created_by_email ?? undefined, updated_by_email: row.updated_by_email ?? undefined,
       conditions: asStringArray(row.conditions), actions: asStringArray(row.actions),
       references: asStringArray(row.reference_names), created: new Date(row.created_at).toISOString(),
@@ -161,12 +163,13 @@ export class PostgresRuleStore {
     };
   }
 
-  async list(status?: Rule["status"], context?: RuleDimensions): Promise<Rule[]> {
+  async list(status?: Rule["status"], context?: RuleDimensions, billingType?: "handling" | "storage"): Promise<Rule[]> {
     const result = await this.pool.query(
       `SELECT * FROM ${this.table("rules")}
         WHERE namespace = $1 AND archived_at IS NULL
           AND ($2::text IS NULL OR status = $2)
-        ORDER BY updated_at DESC`, [this.namespace, status ?? null]
+          AND ($3::text IS NULL OR billing_type = $3)
+        ORDER BY updated_at DESC`, [this.namespace, status ?? null, billingType ?? null]
     );
     return result.rows.map((row: any) => this.rowToRule(row))
       .filter(rule => context === undefined || matchesDimensions(rule.dimensions ?? {}, context))
@@ -196,12 +199,12 @@ export class PostgresRuleStore {
         `INSERT INTO ${this.table("rules")} (
            namespace,id,title,status,tags,summary,description,raw_description,conditions,actions,
            customer_scope,customer_id,customer_name,facility_scope,facility_id,facility_name,
-           item,cycle,reference_names,created_at,updated_at,created_by_email,updated_by_email
+           item,cycle,billing_type,reference_names,created_at,updated_at,created_by_email,updated_by_email
          ) VALUES ($1,$2,$3,'active',$4::jsonb,$5,$6,$7,$8::jsonb,$9::jsonb,
-           $10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19,$19,$20,$20)`,
+           $10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20,$20,$21,$21)`,
         [this.namespace,id,title,JSON.stringify(input.tags),input.summary,input.description,input.raw_description ?? null,
           JSON.stringify(input.conditions),JSON.stringify(input.actions),customer.scope,customer.id,customer.name,
-          facility.scope,facility.id,facility.name,item,cycle,
+          facility.scope,facility.id,facility.name,item,cycle,input.billing_type,
           JSON.stringify([...new Set(input.references)]),now,input.created_by_email ?? null]
       );
       await client.query("COMMIT");
@@ -215,7 +218,7 @@ export class PostgresRuleStore {
 
   async checkSchema(): Promise<void> {
     const result = await this.pool.query(`SELECT max(version) AS version FROM ${this.table("schema_migrations")}`);
-    if (result.rows[0].version !== 4) throw new Error("pi-ruleset requires schema version 4; apply migrations/001_init.sql through 004_fixed_match_fields.sql");
+    if (result.rows[0].version !== 5) throw new Error("pi-ruleset requires schema version 5; apply migrations/001_init.sql through 005_billing_type.sql");
   }
 
   async update(id: string, patch: Partial<Rule> & Partial<PostgresRuleInput>, email?: string): Promise<Rule | null> {
@@ -227,7 +230,7 @@ export class PostgresRuleStore {
       if (!found.rowCount) { await client.query("ROLLBACK"); return null; }
       const values: unknown[] = [this.namespace,id,email ?? null];
       const sets = ["updated_at=now()","updated_by_email=$3"];
-      const columns: Record<string,string> = { title:"title",summary:"summary",description:"description",raw_description:"raw_description",status:"status",tags:"tags",conditions:"conditions",actions:"actions",cycle:"cycle",references:"reference_names" };
+      const columns: Record<string,string> = { title:"title",summary:"summary",description:"description",raw_description:"raw_description",status:"status",tags:"tags",conditions:"conditions",actions:"actions",cycle:"cycle",billing_type:"billing_type",references:"reference_names" };
       for (const [key,column] of Object.entries(columns)) {
         const value = (patch as any)[key];
         if (value === undefined) continue;

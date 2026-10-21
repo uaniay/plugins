@@ -21,11 +21,12 @@ export interface Rule {
   tags: string[];
   summary: string;
   description: string;
-  raw_description?: string;   // original user words, preserved verbatim
+  raw_description?: string;
+  billing_type: "handling" | "storage";
   dimensions?: RuleDimensions;
   created_by_email?: string;
   updated_by_email?: string;
-  scope?: string[];            // customer IDs or groups this rule applies to; empty = all
+  scope?: string[];
   conditions: string[];
   actions: string[];
   references: string[];
@@ -97,6 +98,21 @@ interface RulesetConfig {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Derive the billing type this agent is allowed to use from AGENT_NAME.
+// Agent names containing "storage" → "storage"; anything else with "handling" → "handling".
+function agentBillingType(): "handling" | "storage" | null {
+  const name = process.env.AGENT_NAME?.trim().toLowerCase();
+  if (!name) return null;
+  if (name.includes("storage")) return "storage";
+  if (name.includes("handling")) return "handling";
+  return null;
+}
+
+function checkBillingTypeAccess(agentType: "handling" | "storage" | null, ruleType: "handling" | "storage"): void {
+  if (agentType === null) throw new Error("AGENT_NAME is not set. Cannot determine billing type access. Set AGENT_NAME to a value containing 'handling' or 'storage'.");
+  if (agentType !== ruleType) throw new Error(`Agent '${process.env.AGENT_NAME}' (${agentType}) cannot access ${ruleType} rules. billing_type must match the agent's type.`);
 }
 
 function deepMergeJson<T extends Record<string, unknown>>(base: T, override: Record<string, unknown>): T {
@@ -309,6 +325,7 @@ function serializeRule(rule: Rule): string {
     `- **Updated:** ${rule.updated}`,
   ];
 
+  if (rule.billing_type) lines.push(`- **Billing type:** ${rule.billing_type}`);
   if (rule.scope && rule.scope.length > 0) {
     lines.push(`- **Scope:** ${rule.scope.join(", ")}`);
   }
@@ -373,6 +390,7 @@ function parseRuleFile(content: string): Partial<Rule> {
     tags: get(/\*\*Tags:\*\*\s*(.+)/).split(",").map((t) => t.trim()).filter(Boolean),
     created: get(/\*\*Created:\*\*\s*(.+)/),
     updated: get(/\*\*Updated:\*\*\s*(.+)/),
+    billing_type: (get(/\*\*Billing type:\*\*\s*(\w+)/) || "handling") as Rule["billing_type"],
     scope: scopeRaw ? scopeRaw.split(",").map((s) => s.trim()).filter(Boolean) : [],
     summary: getList("Summary").join(" "),
     raw_description: rawDesc || undefined,
@@ -602,7 +620,9 @@ export default function (pi: ExtensionAPI) {
   async function actor(cwd: string): Promise<string | undefined> {
     const config = readRulesetConfig(cwd);
     const user = config.user_context ? await fetchUserInfo(config.user_context) : null;
-    return typeof user?.email === "string" ? user.email : undefined;
+    if (typeof user?.email === "string") return user.email;
+    const envEmail = process.env.USER_EMAIL?.trim();
+    return envEmail || undefined;
   }
 
   // Merge entries from multiple dirs — project entries override global entries with same ID.
@@ -640,9 +660,9 @@ export default function (pi: ExtensionAPI) {
 
       if (sorted.length < FULL_INJECT_THRESHOLD) {
         const blocks: string[] = [
-          "## Active Business Rules",
+          "## Active Billing Rules",
           "",
-          "Apply only rules whose customer, facility, and cycle fields match the task. The value all matches every task. Item is a generated rule identifier, not a business matching field. More specific rules sort first. Report conflicting rules rather than silently overriding them.",
+          "Apply only when the current task involves billing handling (charge calculation, invoice line items, fee logic) or billing storage (how amounts are persisted or aggregated). Match on customer, facility, and cycle — `all` matches any value. Item is a generated rule identifier, not a matching field. More specific rules sort first. Report conflicts rather than silently overriding.",
           "",
         ];
         for (const rule of sorted) {
@@ -653,10 +673,10 @@ export default function (pi: ExtensionAPI) {
       }
 
       return [
-        "## Active Business Rules (index)",
+        "## Active Billing Rules (index)",
         "",
-        `${sorted.length} rules active. Use \`ruleset_get\` with a semantic query to load relevant rules before applying them.`,
-        "Rules apply only when customer, facility, and cycle match the task; all matches every value. Item identifies a rule and may be used for exact lookup.",
+        `${sorted.length} billing rules active. Use \`ruleset_get\` with a semantic query to load relevant rules before applying them.`,
+        "Apply only for billing handling or billing storage tasks. Rules match when customer, facility, and cycle align with the task; all matches every value. Item identifies a rule and may be used for exact lookup.",
         "",
         "| ID | Title | Item name | Customer | Facility | Item | Cycle | Summary |",
         "|----|-------|-----------|----------|----------|------|-------|---------|",
@@ -678,9 +698,9 @@ export default function (pi: ExtensionAPI) {
 
     if (sorted.length < FULL_INJECT_THRESHOLD) {
       const blocks: string[] = [
-        "## Active Business Rules",
+        "## Active Billing Rules",
         "",
-        "Apply these rules to every relevant task. Rules are ordered high → medium → low priority.",
+        "Apply only when the current task involves billing handling (charge calculation, invoice line items, fee logic) or billing storage (how amounts are persisted or aggregated). Rules are ordered high → medium → low priority.",
         "",
       ];
       for (const entry of sorted) {
@@ -694,10 +714,10 @@ export default function (pi: ExtensionAPI) {
 
     // index-only mode
     const lines = [
-      "## Active Business Rules (index)",
+      "## Active Billing Rules (index)",
       "",
-      `${sorted.length} rules active. Use \`ruleset_get\` with a semantic query to load relevant rules before applying them.`,
-      "Rules with a Scope column only apply to the listed customers.",
+      `${sorted.length} billing rules active. Use \`ruleset_get\` with a semantic query to load relevant rules before applying them.`,
+      "Apply only for billing handling or billing storage tasks. Rules with a Scope column only apply to the listed customers.",
       "",
       "| ID | Title | Priority | Tags | Scope | Summary |",
       "|----|-------|----------|------|-------|---------|",
@@ -795,13 +815,14 @@ export default function (pi: ExtensionAPI) {
   // -------------------------------------------------------------------------
   pi.registerTool({
     name: "ruleset_add",
-    label: "Add Rule",
+    label: "Add Billing Rule",
     description:
-      "Add a new business rule. Checks for similar existing rules before writing. Writes to project (.pi/rules/) by default, or global (~/.pi/agent/rules/) if no project is detected.",
+      "Add a new billing rule — only for rules that govern billing handling (charge calculation, invoice line items, fee logic) or billing storage (how amounts are persisted or aggregated). Checks for similar existing rules before writing. Writes to project (.pi/rules/) by default, or global (~/.pi/agent/rules/) if no project is detected.",
     parameters: Type.Object({
       title: Type.String({ minLength: 1, description: "Short title for the rule; PostgreSQL generates item_name from this title" }),
       summary: Type.String({ description: "One-sentence summary shown in the index" }),
       description: Type.String({ description: "Full description of what this rule governs" }),
+      billing_type: Type.Union([Type.Literal("handling"), Type.Literal("storage")], { description: "Required. 'handling' for charge calculation / invoice line item rules; 'storage' for billing amount persistence / aggregation rules. Must match the calling agent's type." }),
       raw_description: Type.Optional(Type.String({
         description: "Original user words describing the rule — paste verbatim, preserved as-is",
       })),
@@ -843,13 +864,18 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const creatorEmail = await actor(ctx.cwd);
+      if (!creatorEmail) {
+        throw new Error("Cannot create a billing rule: no creator email resolved. Set the USER_EMAIL environment variable or configure user_context in pi-ruleset settings.");
+      }
+      checkBillingTypeAccess(agentBillingType(), params.billing_type);
       const postgres = await getPostgresStore(ctx.cwd);
       if (postgres) {
         if (params.rules_dir || params.target) throw new Error("PostgreSQL uses configured namespace; rules_dir/target are Markdown-only");
         if ("item" in params || "item_name" in params || (params.dimensions && ("item" in params.dimensions || "item_name" in params.dimensions))) {
           throw new Error("item and item_name are generated by PostgreSQL rules and cannot be supplied");
         }
-        const existingRules = await postgres.list("active");
+        const existingRules = await postgres.list("active", undefined, params.billing_type);
         if (!params.force) {
           const candidates = findSimilarRules(
             params.title,
@@ -885,9 +911,6 @@ export default function (pi: ExtensionAPI) {
         }
 
         const fixed = (params.dimensions ?? {}) as RuleDimensions;
-        const user = readRulesetConfig(ctx.cwd).user_context
-          ? await fetchUserInfo(readRulesetConfig(ctx.cwd).user_context!)
-          : null;
         const rule = await postgres.add({
           title: params.title,
           summary: params.summary,
@@ -896,6 +919,7 @@ export default function (pi: ExtensionAPI) {
           conditions: params.conditions ?? [],
           actions: params.actions ?? [],
           tags: params.tags ?? [],
+          billing_type: params.billing_type,
           customer: params.customer ?? dimensionValue(fixed.customer),
           customer_scope: params.customer_scope,
           customer_id: params.customer_id,
@@ -906,7 +930,7 @@ export default function (pi: ExtensionAPI) {
           facility_name: params.facility_name,
           cycle: params.cycle ?? dimensionValue(fixed.cycle) ?? "all",
           references: params.references ?? [],
-          created_by_email: user && typeof user.email === "string" ? user.email : undefined,
+          created_by_email: creatorEmail,
         });
         return { details: {}, content: [{ type: "text", text: `Rule added: ${rule.id} — ${rule.title}` }] };
       }
@@ -970,12 +994,14 @@ export default function (pi: ExtensionAPI) {
         summary: params.summary,
         description: params.description,
         raw_description: params.raw_description,
+        billing_type: params.billing_type,
         scope: params.scope ?? [],
         conditions: params.conditions ?? [],
         actions: params.actions ?? [],
         references: (params.references ?? []).map((r) =>
           r.startsWith("[") ? r : `[${path.basename(r, ".md")}](../references/${r})`
         ),
+        created_by_email: creatorEmail,
         created: today,
         updated: today,
       };
@@ -1007,8 +1033,8 @@ export default function (pi: ExtensionAPI) {
   // -------------------------------------------------------------------------
   pi.registerTool({
     name: "ruleset_update",
-    label: "Update Rule",
-    description: "Update fields of an existing rule by ID. Searches both project and global dirs.",
+    label: "Update Billing Rule",
+    description: "Update fields of an existing billing rule by ID. Searches both project and global dirs.",
     parameters: Type.Object({
       id: Type.String({ description: "Rule ID to update (e.g. 001)" }),
       title: Type.Optional(Type.String({ minLength: 1, description: "Updated title; PostgreSQL updates generated item_name automatically" })),
@@ -1097,8 +1123,8 @@ export default function (pi: ExtensionAPI) {
   // -------------------------------------------------------------------------
   pi.registerTool({
     name: "ruleset_remove",
-    label: "Remove Rule",
-    description: "Archive a rule by ID. Searches both project and global dirs.",
+    label: "Remove Billing Rule",
+    description: "Archive a billing rule by ID. Searches both project and global dirs.",
     parameters: Type.Object({
       id: Type.String({ description: "Rule ID to remove" }),
       rules_dir: Type.Optional(Type.String()),
@@ -1140,9 +1166,10 @@ export default function (pi: ExtensionAPI) {
   // -------------------------------------------------------------------------
   pi.registerTool({
     name: "ruleset_list",
-    label: "List Rules",
-    description: "List all rules from both project and global dirs",
+    label: "List Billing Rules",
+    description: "List billing rules (billing handling and billing storage) from both project and global dirs",
     parameters: Type.Object({
+      billing_type: Type.Union([Type.Literal("handling"), Type.Literal("storage")], { description: "Required. Filter to rules of this billing type. Must match the calling agent's type (handling or storage)." }),
       dimensions: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Array(Type.String())]))),
       customer: Type.Optional(Type.String()),
       facility: Type.Optional(Type.String()),
@@ -1158,11 +1185,12 @@ export default function (pi: ExtensionAPI) {
       rules_dir: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      checkBillingTypeAccess(agentBillingType(), params.billing_type);
       const postgres = await getPostgresStore(ctx.cwd);
       if (postgres) {
         if (params.rules_dir) throw new Error("PostgreSQL uses configured namespace; rules_dir/target are Markdown-only");
         const filter = params.status === "all" ? undefined : params.status ?? undefined;
-        const rules = await postgres.list(filter, fixedMatchContext(params));
+        const rules = await postgres.list(filter, fixedMatchContext(params), params.billing_type);
         if (rules.length === 0) {
           return { details: {}, content: [{ type: "text", text: "No rules found." }] };
         }
@@ -1176,7 +1204,9 @@ export default function (pi: ExtensionAPI) {
       if (params.dimensions) throw new Error("Dynamic dimensions require PostgreSQL storage");
       const { read } = resolveRulesDirs(ctx.cwd, params.rules_dir);
       const filter = params.status ?? "all";
-      const entries = mergeEntries(read).filter((e) => filter === "all" || e.status === filter);
+      const entries = mergeEntries(read).filter((e) =>
+        (filter === "all" || e.status === filter)
+      );
 
       if (entries.length === 0) {
         return { details: {}, content: [{ type: "text", text: "No rules found." }] };
@@ -1200,9 +1230,10 @@ export default function (pi: ExtensionAPI) {
   // -------------------------------------------------------------------------
   pi.registerTool({
     name: "ruleset_get",
-    label: "Get Rules",
-    description: "Retrieve full rule content by ID or semantic query. Searches both project and global dirs.",
+    label: "Get Billing Rules",
+    description: "Retrieve full billing rule content by ID or semantic query. Only returns rules governing billing handling or billing storage. Searches both project and global dirs.",
     parameters: Type.Object({
+      billing_type: Type.Union([Type.Literal("handling"), Type.Literal("storage")], { description: "Required. Only retrieve rules of this billing type. Must match the calling agent's type (handling or storage)." }),
       dimensions: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Array(Type.String())]))),
       customer: Type.Optional(Type.String()),
       facility: Type.Optional(Type.String()),
@@ -1218,13 +1249,14 @@ export default function (pi: ExtensionAPI) {
       rules_dir: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      checkBillingTypeAccess(agentBillingType(), params.billing_type);
       const postgres = await getPostgresStore(ctx.cwd);
       if (postgres) {
         if (params.rules_dir) throw new Error("PostgreSQL uses configured namespace; rules_dir/target are Markdown-only");
         if (params.id) {
           const rule = await postgres.get(params.id);
           const context = fixedMatchContext(params);
-          if (!rule || (context && !matchesDimensions(rule.dimensions ?? {}, context))) {
+          if (!rule || rule.billing_type !== params.billing_type || (context && !matchesDimensions(rule.dimensions ?? {}, context))) {
             return { details: {}, content: [{ type: "text", text: `Rule not found: ${params.id}` }], isError: true };
           }
           return { details: {}, content: [{ type: "text", text: serializeRule(rule) }] };
@@ -1232,7 +1264,7 @@ export default function (pi: ExtensionAPI) {
 
         if (params.query) {
           const topK = params.top_k ?? 3;
-          const activeRules = await postgres.list("active", fixedMatchContext(params));
+          const activeRules = await postgres.list("active", fixedMatchContext(params), params.billing_type);
           if (activeRules.length === 0) {
             return { details: {}, content: [{ type: "text", text: "No active rules found." }] };
           }
@@ -1265,8 +1297,8 @@ export default function (pi: ExtensionAPI) {
         }
         const entry = readIndex(sourceDir).find((e) => e.id === params.id)!;
         const rule = readRuleFile(path.join(sourceDir, entry.file));
-        if (!rule) {
-          return { details: {}, content: [{ type: "text", text: `Rule file missing: ${entry.file}` }], isError: true };
+        if (!rule || rule.billing_type !== params.billing_type) {
+          return { details: {}, content: [{ type: "text", text: `Rule not found: ${params.id}` }], isError: true };
         }
         return { details: {}, content: [{ type: "text", text: serializeRule(rule) }] };
       }
@@ -1278,7 +1310,7 @@ export default function (pi: ExtensionAPI) {
         const ruleMap = new Map<string, Rule>();
         for (const entry of allEntries) {
           const rule = readRuleFile(path.join(entry.sourceDir, entry.file));
-          if (rule) ruleMap.set(rule.id, rule);
+          if (rule && rule.billing_type === params.billing_type) ruleMap.set(rule.id, rule);
         }
 
         if (ruleMap.size === 0) {

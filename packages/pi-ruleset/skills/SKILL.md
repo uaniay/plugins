@@ -1,7 +1,7 @@
 ---
 name: ruleset
 description: Manage billing rules that govern how charges are calculated or stored — invoice line items, fee computation, billing item matching, storage cost rules
-version: 0.4.3
+version: 0.4.4
 triggers:
   - billing rule
   - billing rules

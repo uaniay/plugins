@@ -1036,7 +1036,7 @@ export default function (pi: ExtensionAPI) {
     label: "Update Billing Rule",
     description: "Update fields of an existing billing rule by ID. Searches both project and global dirs.",
     parameters: Type.Object({
-      id: Type.String({ description: "Rule ID to update (e.g. 001)" }),
+      id: Type.String({ description: "Rule ID (UUID)" }),
       title: Type.Optional(Type.String({ minLength: 1, description: "Updated title; PostgreSQL updates generated item_name automatically" })),
       summary: Type.Optional(Type.String()),
       description: Type.Optional(Type.String()),
@@ -1243,7 +1243,7 @@ export default function (pi: ExtensionAPI) {
       facility_name: Type.Optional(Type.String()),
       item: Type.Optional(Type.String({ description: "Generated item UUID for exact lookup only" })),
       cycle: Type.Optional(Type.String()),
-      id: Type.Optional(Type.String({ description: "Exact rule ID (e.g. 001)" })),
+      id: Type.Optional(Type.String({ description: "Exact rule ID (UUID)" })),
       query: Type.Optional(Type.String({ description: "Natural language query to find relevant rules" })),
       top_k: Type.Optional(Type.Integer({ default: 3, minimum: 1, maximum: 100 })),
       rules_dir: Type.Optional(Type.String()),

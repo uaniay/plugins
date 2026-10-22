@@ -187,9 +187,7 @@ export class PostgresRuleStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`pi-ruleset:${this.schema}:${this.namespace}`]);
-      const idResult = await client.query(`SELECT COALESCE(MAX(CASE WHEN id ~ '^[0-9]+$' THEN id::integer END), 0) + 1 AS next_id FROM ${this.table("rules")} WHERE namespace=$1`, [this.namespace]);
-      const id = String(idResult.rows[0].next_id).padStart(3, "0");
+      const id = randomUUID();
       const now = new Date();
       const customer = partyFromInput(input as unknown as Record<string, unknown>, "customer");
       const facility = partyFromInput(input as unknown as Record<string, unknown>, "facility");
@@ -218,7 +216,7 @@ export class PostgresRuleStore {
 
   async checkSchema(): Promise<void> {
     const result = await this.pool.query(`SELECT max(version) AS version FROM ${this.table("schema_migrations")}`);
-    if (result.rows[0].version !== 5) throw new Error("pi-ruleset requires schema version 5; apply migrations/001_init.sql through 005_billing_type.sql");
+    if (result.rows[0].version !== 6) throw new Error("pi-ruleset requires schema version 6; apply migrations/001_init.sql through 006_uuid_id.sql");
   }
 
   async update(id: string, patch: Partial<Rule> & Partial<PostgresRuleInput>, email?: string): Promise<Rule | null> {

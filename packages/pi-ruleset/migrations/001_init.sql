@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS agent_ruleset.schema_migrations (
 );
 
 CREATE TABLE IF NOT EXISTS agent_ruleset.rules (
-  id text NOT NULL,
+  id uuid NOT NULL,
   namespace text NOT NULL,
   title text NOT NULL,
   status text NOT NULL CHECK (status IN ('active', 'inactive')),

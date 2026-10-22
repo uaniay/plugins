@@ -1,7 +1,7 @@
 ---
 name: ruleset
 description: Manage billing rules that govern how charges are calculated or stored — invoice line items, fee computation, billing item matching, storage cost rules
-version: 0.4.4
+version: 0.4.5
 triggers:
   - billing rule
   - billing rules
@@ -222,8 +222,8 @@ If no matching rule is found: _"No rule found matching '{keyword}'. Use `ruleset
 rules/
 ├── RULES.md                      # Index — injected into context each turn
 ├── 2026-08-25/
-│   ├── 001-discount-cap.md
-│   └── 002-approval-flow.md
+│   ├── 550e8400-e29b-41d4-a716-446655440000-discount-cap.md
+│   └── 6ba7b810-9dad-11d1-80b4-00c04fd430c8-approval-flow.md
 └── references/
     └── pricing-policy.md
 ```

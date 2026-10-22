@@ -87,10 +87,9 @@ test('PostgreSQL migrations, CRUD, isolation, concurrency, rollback and referenc
   process.env.AGENT_NAME = process.env.AGENT_NAME.slice(0,-6);
   try {
     await pool.query('CREATE SCHEMA IF NOT EXISTS agent_ruleset');
-    for (let round=0;round<2;round++) for (const migration of ['001_init.sql','002_storage.sql','003_remove_priority.sql','004_fixed_match_fields.sql']) {
+    for (let round=0;round<2;round++) for (const migration of ['001_init.sql','002_storage.sql','003_remove_priority.sql','004_fixed_match_fields.sql','005_billing_type.sql','006_uuid_id.sql']) {
       await pool.query(fs.readFileSync(require('node:path').join(__dirname,'../migrations',migration),'utf8'));
     }
-    await pool.query(fs.readFileSync(require('node:path').join(__dirname,'../migrations','004_fixed_match_fields.sql'),'utf8'));
     await store.checkSchema();
     assert.equal((await pool.query("SELECT is_generated FROM information_schema.columns WHERE table_schema='agent_ruleset' AND table_name='rules' AND column_name='item_name'")).rows[0].is_generated,'ALWAYS');
     assert.equal((await pool.query("SELECT column_name FROM information_schema.columns WHERE table_schema='agent_ruleset' AND table_name='rules' AND column_name IN ('priority','rule_id','dimension_name','customer','facility','legacy_item')")).rowCount,0);
@@ -99,6 +98,7 @@ test('PostgreSQL migrations, CRUD, isolation, concurrency, rollback and referenc
     const read = await store.get(added.id);
     assert.equal(added.item_name,input.title);
     assert.equal(read.item_name,input.title);
+    assert.match(added.id,/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     assert.match(read.dimensions.item,/^[0-9a-f-]{36}$/);
     assert.equal(read.dimensions.customer_name,'A');
     assert.equal(read.dimensions.facility_name,'F');

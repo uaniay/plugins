@@ -132,10 +132,10 @@ Two environment variables are mandatory before any rule creation can proceed. Th
 
 | Variable | Purpose | Required |
 |----------|---------|---------|
-| `USER_EMAIL` | Creator identity attached to every new rule | Always |
+| `AGENT_USER_EMAIL` | Creator identity attached to every new rule | Always |
 | `AGENT_NAME` | Must contain `handling` or `storage` — determines which billing type namespace the agent may access | Always |
 
-`USER_EMAIL` is read by `actor()` to record who created the rule. If absent, `ruleset_add` throws:
+`AGENT_USER_EMAIL` is read by `actor()` to record who created the rule. If absent, `ruleset_add` throws:
 > Cannot create a billing rule: no creator email resolved.
 
 `AGENT_NAME` is read by `agentBillingType()`. It must contain the literal string `handling` or `storage`. If absent or neither keyword is present, all rule tools throw:

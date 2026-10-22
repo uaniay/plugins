@@ -9,9 +9,9 @@ Do **not** apply rules for user permissions, access control, data validation unr
 
 ## Required environment variables
 
-`USER_EMAIL` and `AGENT_NAME` are mandatory. There are no defaults.
+`AGENT_USER_EMAIL` and `AGENT_NAME` are mandatory. There are no defaults.
 
-- `USER_EMAIL` — creator identity recorded on every new rule. Missing this causes `ruleset_add` to fail.
+- `AGENT_USER_EMAIL` — creator identity recorded on every new rule. Missing this causes `ruleset_add` to fail.
 - `AGENT_NAME` — must contain `handling` or `storage`. Determines which billing type namespace this agent may access. Missing or unrecognised value causes all rule tools to fail.
 
 All calls to `ruleset_add`, `ruleset_list`, and `ruleset_get` must pass `billing_type` explicitly (`"handling"` or `"storage"`). It must match the type derived from `AGENT_NAME`.

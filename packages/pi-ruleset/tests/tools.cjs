@@ -18,9 +18,9 @@ const input={title:'仓库计费',summary:'仓库费用规则',description:'说�
 
 test('Markdown add/list/read/update/archive regression with empty scope/tags',async()=>{
   const h=harness('markdown');
-  const previousUserEmail=process.env.USER_EMAIL;
+  const previousUserEmail=process.env.AGENT_USER_EMAIL;
   const previousAgentName=process.env.AGENT_NAME;
-  process.env.USER_EMAIL='test@example.com';
+  process.env.AGENT_USER_EMAIL='test@example.com';
   process.env.AGENT_NAME='storage-agent';
   try {
     await h.call('ruleset_add',input);
@@ -31,7 +31,7 @@ test('Markdown add/list/read/update/archive regression with empty scope/tags',as
     await h.call('ruleset_remove',{id:'001'});
     assert.equal((await h.call('ruleset_get',{id:'001',billing_type:'storage'})).isError,true);
   } finally {
-    previousUserEmail === undefined ? delete process.env.USER_EMAIL : process.env.USER_EMAIL=previousUserEmail;
+    previousUserEmail === undefined ? delete process.env.AGENT_USER_EMAIL : process.env.AGENT_USER_EMAIL=previousUserEmail;
     previousAgentName === undefined ? delete process.env.AGENT_NAME : process.env.AGENT_NAME=previousAgentName;
     await h.close();
   }

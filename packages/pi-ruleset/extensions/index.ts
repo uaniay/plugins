@@ -621,7 +621,7 @@ export default function (pi: ExtensionAPI) {
     const config = readRulesetConfig(cwd);
     const user = config.user_context ? await fetchUserInfo(config.user_context) : null;
     if (typeof user?.email === "string") return user.email;
-    const envEmail = process.env.USER_EMAIL?.trim();
+    const envEmail = process.env.AGENT_USER_EMAIL?.trim();
     return envEmail || undefined;
   }
 
@@ -866,7 +866,7 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const creatorEmail = await actor(ctx.cwd);
       if (!creatorEmail) {
-        throw new Error("Cannot create a billing rule: no creator email resolved. Set the USER_EMAIL environment variable or configure user_context in pi-ruleset settings.");
+        throw new Error("Cannot create a billing rule: no creator email resolved. Set the AGENT_USER_EMAIL environment variable or configure user_context in pi-ruleset settings.");
       }
       checkBillingTypeAccess(agentBillingType(), params.billing_type);
       const postgres = await getPostgresStore(ctx.cwd);

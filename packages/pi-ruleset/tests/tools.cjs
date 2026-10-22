@@ -14,19 +14,27 @@ function harness(storage) {
   const ctx={cwd,ui:{notify(){}}};
   return {cwd,events,ctx,call:(name,args)=>tools[name].execute('test',args,undefined,undefined,ctx),async close(){await events.session_shutdown();fs.rmSync(cwd,{recursive:true,force:true});}};
 }
-const input={title:'仓库计费',summary:'仓库费用规则',description:'说明',conditions:[],actions:[],priority:'high',tags:[],references:[],customer:'A',facility:'F',cycle:'monthly',force:true};
+const input={title:'仓库计费',summary:'仓库费用规则',description:'说明',conditions:[],actions:[],priority:'high',tags:[],references:[],customer:'A',facility:'F',cycle:'monthly',billing_type:'storage',force:true};
 
 test('Markdown add/list/read/update/archive regression with empty scope/tags',async()=>{
   const h=harness('markdown');
+  const previousUserEmail=process.env.USER_EMAIL;
+  const previousAgentName=process.env.AGENT_NAME;
+  process.env.USER_EMAIL='test@example.com';
+  process.env.AGENT_NAME='storage-agent';
   try {
     await h.call('ruleset_add',input);
-    assert.match((await h.call('ruleset_list',{})).content[0].text,/仓库计费/);
-    assert.match((await h.call('ruleset_get',{query:'仓库'})).content[0].text,/仓库计费/);
+    assert.match((await h.call('ruleset_list',{billing_type:'storage'})).content[0].text,/仓库计费/);
+    assert.match((await h.call('ruleset_get',{query:'仓库',billing_type:'storage'})).content[0].text,/仓库计费/);
     await h.call('ruleset_update',{id:'001',title:'Updated'});
-    assert.match((await h.call('ruleset_get',{id:'001'})).content[0].text,/Updated/);
+    assert.match((await h.call('ruleset_get',{id:'001',billing_type:'storage'})).content[0].text,/Updated/);
     await h.call('ruleset_remove',{id:'001'});
-    assert.equal((await h.call('ruleset_get',{id:'001'})).isError,true);
-  } finally {await h.close();}
+    assert.equal((await h.call('ruleset_get',{id:'001',billing_type:'storage'})).isError,true);
+  } finally {
+    previousUserEmail === undefined ? delete process.env.USER_EMAIL : process.env.USER_EMAIL=previousUserEmail;
+    previousAgentName === undefined ? delete process.env.AGENT_NAME : process.env.AGENT_NAME=previousAgentName;
+    await h.close();
+  }
 });
 
 test('Global PostgreSQL storage remains active when project only overrides mode',async()=>{
@@ -84,7 +92,7 @@ test('PostgreSQL tools and async context use database only', {skip:!process.env.
     await h.call('ruleset_add_reference',{name:'p',content:'body'});
     assert.equal((await h.call('ruleset_get_reference',{name:'p'})).content[0].text,'body');
     await h.call('ruleset_remove',{id:'001'});
-    assert.equal((await h.call('ruleset_get',{id:'001'})).isError,true);
+    assert.equal((await h.call('ruleset_get',{id:'001',billing_type:'storage'})).isError,true);
     await h.call('ruleset_restore',{id:'001'});
     assert.match((await h.call('ruleset_get',{id:'001'})).content[0].text,/Changed/);
     await assert.rejects(()=>h.call('ruleset_add',{...input,target:'global'}));

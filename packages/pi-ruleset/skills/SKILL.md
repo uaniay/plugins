@@ -1,7 +1,7 @@
 ---
 name: ruleset
 description: Manage billing rules that govern how charges are calculated or stored — invoice line items, fee computation, billing item matching, storage cost rules
-version: 0.4.0
+version: 0.4.3
 triggers:
   - billing rule
   - billing rules
@@ -125,6 +125,25 @@ customer_name: "ClientA"
 ```
 
 Rules with a specific customer are only applied when the current task customer matches. Use `customer_scope: "all"` for all customers; likewise use `facility_scope: "all"` for all facilities. A specific scope requires an ID or name. Apply the same matching check to `cycle`.
+
+## Required environment variables
+
+Two environment variables are mandatory before any rule creation can proceed. There are no defaults — missing either one causes `ruleset_add` to fail immediately.
+
+| Variable | Purpose | Required |
+|----------|---------|---------|
+| `USER_EMAIL` | Creator identity attached to every new rule | Always |
+| `AGENT_NAME` | Must contain `handling` or `storage` — determines which billing type namespace the agent may access | Always |
+
+`USER_EMAIL` is read by `actor()` to record who created the rule. If absent, `ruleset_add` throws:
+> Cannot create a billing rule: no creator email resolved.
+
+`AGENT_NAME` is read by `agentBillingType()`. It must contain the literal string `handling` or `storage`. If absent or neither keyword is present, all rule tools throw:
+> AGENT_NAME is not set. Cannot determine billing type access.
+
+All calls to `ruleset_add`, `ruleset_list`, and `ruleset_get` must also pass `billing_type` explicitly (`"handling"` or `"storage"`). It must match the agent's type derived from `AGENT_NAME`.
+
+---
 
 ## Required rule context
 
